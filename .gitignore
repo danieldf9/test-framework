@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Sentinel state (locator cache, run history, artifacts).
+# The DB is designed to be committed-ignorable: keep it out of git by default,
+# move state between machines/CI with `sentinel db export/import`.
+.sentinel/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Secrets — never commit API keys
+.env
+.env.*
+
+# Misc
+*.log
+.DS_Store

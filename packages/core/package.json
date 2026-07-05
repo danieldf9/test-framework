@@ -1,0 +1,40 @@
+{
+  "name": "@sentinel/core",
+  "version": "0.1.0",
+  "description": "Self-healing Playwright test framework core: intent-annotated fixture, tiered healing pipeline, SQLite state.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sentinel/providers": "workspace:*",
+    "better-sqlite3": "^11.8.1",
+    "jiti": "^2.4.2",
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.45.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.10.2",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@sentinel/cli",
+  "version": "0.1.0",
+  "description": "Sentinel CLI: run suites with healing, manage the state DB, scaffold projects.",
+  "type": "module",
+  "bin": {
+    "sentinel": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sentinel/core": "workspace:*",
+    "@sentinel/providers": "workspace:*",
+    "@sentinel/report": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
