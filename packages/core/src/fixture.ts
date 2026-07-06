@@ -314,7 +314,9 @@ export class SentinelActions {
       candidates,
       pageUrl: this.pageUrl(),
       navStatus: this.lastNavStatus,
-      knownFlaky: this.ctx.store.isKnownFlaky(this.testId, this.ctx.gitSha),
+      knownFlaky: this.cfg.diagnosis.flakeDetection
+        ? this.ctx.store.isKnownFlaky(this.testId, this.ctx.gitSha)
+        : false,
     };
     let diagnosis = classifyFailure(diagnosisInput, {
       driftFloor: this.cfg.diagnosis.driftFloor,
@@ -716,7 +718,9 @@ export class SentinelActions {
         this.unverifiedHeals > 0 && normalized === 'passed' ? 'passed_unverified' : normalized,
       durationMs: this.testInfo.duration,
       error: this.testInfo.error ? String(this.testInfo.error.message ?? '') : null,
-      flakyTagged: this.ctx.store.isKnownFlaky(this.testId, this.ctx.gitSha),
+      flakyTagged: this.cfg.diagnosis.flakeDetection
+        ? this.ctx.store.isKnownFlaky(this.testId, this.ctx.gitSha)
+        : false,
     });
     if (normalized === 'failed') this.flushArtifacts();
   }

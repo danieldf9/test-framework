@@ -8,6 +8,11 @@ dist/
 # The DB is designed to be committed-ignorable: keep it out of git by default,
 # move state between machines/CI with `sentinel db export/import`.
 .sentinel/
+.sentinel-ci/
+.sentinel-ci-sim/
+.sentinel-shards/
+.sentinel-merged/
+sentinel-report/
 
 # Playwright
 test-results/

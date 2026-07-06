@@ -1,0 +1,255 @@
+# Reusable Sentinel workflow (spec §9).
+#
+# - Restores the locator-cache DB (portable JSON export) from actions/cache
+# - Runs the suite sharded; each shard gets its own run id (gh-<run>-shard-<n>)
+# - Uploads the HTML report + heal screenshots as artifacts
+# - Posts/updates a single PR summary comment (pass/fail/healed/unverified/
+#   escalated counts) or opens a `sentinel-needs-human` issue on push builds
+# - Sets a `sentinel / needs-human` check run to action_required when questions
+#   are pending — never a fake green, never a noisy red
+# - Saves the merged, updated locator cache for the next run
+#
+# Secrets: only the LLM API key. Without it Sentinel degrades gracefully to
+# deterministic-only healing (Tiers 0-1).
+#
+# This repo builds @sentinel/* from source; external consumers get an
+# equivalent single-job template from `sentinel init`.
+name: sentinel-reusable
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory containing playwright.config.ts / sentinel.config.ts
+        type: string
+        default: '.'
+      shard-list:
+        description: JSON array of shard indices, e.g. '[1,2]'
+        type: string
+        default: '[1]'
+      shard-total:
+        description: Total shard count (must match shard-list length)
+        type: number
+        default: 1
+      heal:
+        description: Healing mode (auto | suggest | off)
+        type: string
+        default: auto
+      llm-provider:
+        description: LLM provider (none | anthropic | openai | gemini | openai-compatible)
+        type: string
+        default: 'none'
+      llm-model:
+        type: string
+        default: ''
+      llm-base-url:
+        type: string
+        default: ''
+    secrets:
+      SENTINEL_LLM_API_KEY:
+        required: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shard-list) }}
+    env:
+      SENTINEL_RUN_ID: gh-${{ github.run_id }}-shard-${{ matrix.shard }}
+      SENTINEL_HEAL: ${{ inputs.heal }}
+      SENTINEL_LLM_PROVIDER: ${{ inputs.llm-provider }}
+      SENTINEL_LLM_MODEL: ${{ inputs.llm-model }}
+      SENTINEL_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+      SENTINEL_LLM_API_KEY: ${{ secrets.SENTINEL_LLM_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - run: npx playwright install --with-deps chromium
+        working-directory: ${{ inputs.working-directory }}
+
+      - name: Restore locator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.working-directory }}/.sentinel-ci/cache.json
+          key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-cache-${{ github.ref_name }}-
+            sentinel-cache-
+      - name: Import locator cache
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f .sentinel-ci/cache.json ]; then
+            npx sentinel db import .sentinel-ci/cache.json
+          else
+            echo "no locator cache yet — first run populates it"
+          fi
+
+      - name: Run suite (shard ${{ matrix.shard }}/${{ inputs.shard-total }})
+        working-directory: ${{ inputs.working-directory }}
+        run: npx sentinel run -- --shard=${{ matrix.shard }}/${{ inputs.shard-total }}
+
+      - name: Export shard state
+        if: always()
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          mkdir -p .sentinel-shards
+          npx sentinel db export --json .sentinel-shards/shard-${{ matrix.shard }}.json
+      - name: Upload shard state + heal screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-shard-${{ matrix.shard }}
+          path: |
+            ${{ inputs.working-directory }}/.sentinel-shards/
+            ${{ inputs.working-directory }}/.sentinel/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+
+      - name: Restore locator cache (history baseline)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.working-directory }}/.sentinel-ci/cache.json
+          key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-cache-${{ github.ref_name }}-
+            sentinel-cache-
+      - name: Download shard states
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sentinel-shard-*
+          merge-multiple: true
+          path: ${{ inputs.working-directory }}/.sentinel-merged
+
+      - name: Merge shard states into one DB
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f .sentinel-ci/cache.json ]; then
+            npx sentinel db import .sentinel-ci/cache.json
+          fi
+          find .sentinel-merged -name 'shard-*.json' -print0 | while IFS= read -r -d '' f; do
+            echo "importing $f"
+            npx sentinel db import "$f"
+          done
+
+      - name: Report + summary
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npx sentinel report --out sentinel-report
+          npx sentinel summary --run-prefix "gh-${{ github.run_id }}-" \
+            --out sentinel-report/summary.md --json sentinel-report/summary.json
+          cat sentinel-report/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-report
+          path: ${{ inputs.working-directory }}/sentinel-report
+          retention-days: 30
+
+      - name: Post/update summary comment (PR) or needs-human issue (push)
+        uses: actions/github-script@v7
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = path.join(process.env.WORKDIR, 'sentinel-report');
+            const md = fs.readFileSync(path.join(dir, 'summary.md'), 'utf8');
+            const counts = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8'));
+            const marker = '<!-- sentinel-summary -->';
+            const body = `${marker}\n${md}\n_Artifacts: **sentinel-report** (HTML report incl. heal screenshots)._`;
+
+            if (context.payload.pull_request) {
+              // Single comment, updated in place — never a comment flood.
+              const { data: comments } = await github.rest.issues.listComments({
+                ...context.repo, issue_number: context.payload.pull_request.number, per_page: 100,
+              });
+              const existing = comments.find((c) => c.body && c.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number: context.payload.pull_request.number, body,
+                });
+              }
+            } else if (counts.pendingEscalations > 0) {
+              // Push build with open questions → labeled issue (spec §6 CI channel).
+              const label = 'sentinel-needs-human';
+              try {
+                await github.rest.issues.createLabel({ ...context.repo, name: label, color: 'D93F0B' });
+              } catch { /* label exists */ }
+              const { data: open } = await github.rest.issues.listForRepo({
+                ...context.repo, state: 'open', labels: label, per_page: 50,
+              });
+              const existing = open.find((i) => i.body && i.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.update({ ...context.repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({
+                  ...context.repo,
+                  title: 'Sentinel needs a human decision',
+                  labels: [label],
+                  body,
+                });
+              }
+            }
+
+      - name: Needs-human check run
+        uses: actions/github-script@v7
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const counts = JSON.parse(
+              fs.readFileSync(path.join(process.env.WORKDIR, 'sentinel-report', 'summary.json'), 'utf8'),
+            );
+            if (counts.pendingEscalations === 0) return;
+            const headSha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.checks.create({
+              ...context.repo,
+              name: 'sentinel / needs-human',
+              head_sha: headSha,
+              status: 'completed',
+              conclusion: 'action_required',
+              output: {
+                title: `${counts.pendingEscalations} escalation(s) awaiting a human answer`,
+                summary: 'Reply `/sentinel choose <id> <label>` on the PR/issue, or run `sentinel escalations --answer` locally.',
+              },
+            });
+
+      - name: Export merged locator cache
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          mkdir -p .sentinel-ci
+          npx sentinel db export --json .sentinel-ci/cache.json
+      - name: Save locator cache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ inputs.working-directory }}/.sentinel-ci/cache.json
+          key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}

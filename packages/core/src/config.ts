@@ -81,6 +81,10 @@ export const SentinelConfigSchema = z.object({
     .default({}),
   diagnosis: z
     .object({
+      /** Statistical flake detection (pass+fail on the same git SHA). Disable
+       * only when the app under test changes independently of the test repo's
+       * SHA (e.g. the chaos harness, apps deployed on their own cadence). */
+      flakeDetection: z.boolean().default(true),
       /** Below this best-similarity, the element is considered genuinely absent. */
       driftFloor: z.number().min(0).max(1).default(0.5),
       /** Assertion guard: healed assertion targets must carry this much of the

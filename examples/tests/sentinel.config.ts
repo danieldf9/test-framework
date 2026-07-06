@@ -8,6 +8,12 @@ export default defineConfig({
     // test; the framework default (3 per test) is tuned for real-world drift.
     maxHealsPerTest: 5,
   },
+  diagnosis: {
+    // The chaos harness deliberately mutates the APP while the test repo's git
+    // SHA stays fixed — exactly the pattern statistical flake detection exists
+    // to catch. Disable it here so intentional mutations aren't quarantined.
+    flakeDetection: false,
+  },
   llm: {
     // Provider/model/baseUrl come from .env (SENTINEL_LLM_*); the key is read
     // from GEMINI_API_KEY so it is never duplicated across files.

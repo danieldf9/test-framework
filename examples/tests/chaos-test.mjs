@@ -20,9 +20,19 @@
  *    the screenshot: Tier 3 heals with a DOM cross-check agreement boost.
  * R. `sentinel report`                          → static HTML with heals,
  *    before/after screenshots, flake dashboard and LLM cost summary.
+ * I. CI simulation                              → seed run exported to JSON,
+ *    two "shard machines" (separate DBs) import it, heal drifted tests from
+ *    the cache alone, export; merged + aggregated via `sentinel summary
+ *    --run-prefix` — the exact loop .github/workflows/sentinel.yml performs.
+ * M. `sentinel migrate`                          → a vanilla Playwright spec is
+ *    mechanically wrapped with intent TODO stubs and runs green under the
+ *    sentinel fixture.
+ * P. `sentinel promote`                          → the reviewed heal is written
+ *    back into a (sandboxed) spec as a reviewable diff; ambiguity-creating
+ *    promotions are refused; assertions keep their expected values.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SentinelStore } from '@sentinel/core';
@@ -103,7 +113,7 @@ async function setProfile(profile) {
   }
 }
 
-function runSuite(runId, llmEnv = null) {
+function runSuite(runId, llmEnv = null, opts = {}) {
   console.log(
     `\n▶ playwright test (run: ${runId}, llm: ${llmEnv ? llmEnv.SENTINEL_LLM_BASE_URL : 'off'})`,
   );
@@ -113,15 +123,24 @@ function runSuite(runId, llmEnv = null) {
   }
   // Explicit provider=none (not just unset): a developer .env with a real
   // provider must not leak into the deterministic phases.
-  Object.assign(env, llmEnv ?? { SENTINEL_LLM_PROVIDER: 'none' });
+  Object.assign(env, llmEnv ?? { SENTINEL_LLM_PROVIDER: 'none' }, opts.env ?? {});
   const started = Date.now();
-  const res = spawnSync('npx', ['playwright', 'test'], {
+  const res = spawnSync('npx', ['playwright', 'test', ...(opts.args ?? [])], {
     cwd: here,
     shell: true,
     stdio: 'inherit',
     env,
   });
   return { exit: res.status ?? 1, durationMs: Date.now() - started };
+}
+
+function cli(args, extraEnv = {}) {
+  const cliJs = path.join(here, '..', '..', 'packages', 'cli', 'dist', 'index.js');
+  return spawnSync(process.execPath, [cliJs, ...args], {
+    cwd: here,
+    encoding: 'utf8',
+    env: { ...process.env, SENTINEL_LLM_PROVIDER: 'none', ...extraEnv },
+  });
 }
 
 function openStore() {
@@ -477,6 +496,182 @@ async function main() {
       ? readdirSync(path.join(reportDir, 'assets'))
       : [];
     check(assets.length >= 1, `before/after screenshots copied into the report (${assets.length})`);
+  }
+
+  // ---- Phase I: CI simulation — shards + JSON cache persistence (spec §7/§9) ----
+  console.log('\nPhase I — CI simulation (shards, portable cache, aggregated summary):');
+  {
+    const sim = path.join(here, '.sentinel-ci-sim');
+    rmSync(sim, { recursive: true, force: true });
+    mkdirSync(sim, { recursive: true });
+    const dbSeed = path.join(sim, 'seed.db');
+    const seedJson = path.join(sim, 'seed.json');
+
+    await setProfile('baseline');
+    const seedRun = runSuite(`gh-sim-seed-${stamp}`, null, { env: { SENTINEL_DB: dbSeed } });
+    check(seedRun.exit === 0, 'seed run ("main" branch) passes and populates the cache');
+    const exp = cli(['db', 'export', '--json', seedJson], { SENTINEL_DB: dbSeed });
+    check(exp.status === 0, 'cache exported to portable JSON (the actions/cache payload)');
+
+    await setProfile('chaos-drift');
+    const shards = [
+      { n: 1, grep: 'add products' },
+      { n: 2, grep: 'checkout flow' },
+    ];
+    for (const s of shards) {
+      const db = path.join(sim, `shard-${s.n}.db`);
+      const imp = cli(['db', 'import', seedJson], { SENTINEL_DB: db });
+      check(imp.status === 0, `shard ${s.n}: fresh machine restored the cache from JSON`);
+      const run = runSuite(`gh-sim-${stamp}-shard-${s.n}`, null, {
+        env: { SENTINEL_DB: db },
+        args: ['--grep', `"${s.grep}"`],
+      });
+      check(run.exit === 0, `shard ${s.n}: drifted tests healed using only the imported cache`);
+      const ex = cli(['db', 'export', '--json', path.join(sim, `shard-${s.n}.json`)], {
+        SENTINEL_DB: db,
+      });
+      check(ex.status === 0, `shard ${s.n}: state exported for the merge job`);
+    }
+
+    const merged = path.join(sim, 'merged.db');
+    for (const s of shards) {
+      const im = cli(['db', 'import', path.join(sim, `shard-${s.n}.json`)], {
+        SENTINEL_DB: merged,
+      });
+      check(im.status === 0, `merge job: imported shard ${s.n} state`);
+    }
+    const sumJson = path.join(sim, 'summary.json');
+    const sum = cli(['summary', '--run-prefix', `gh-sim-${stamp}-shard-`, '--json', sumJson], {
+      SENTINEL_DB: merged,
+    });
+    check(
+      sum.status === 0 && sum.stdout.includes('Sentinel run summary'),
+      'aggregated markdown summary generated for the PR comment',
+    );
+    const counts = JSON.parse(readFileSync(sumJson, 'utf8'));
+    check(
+      counts.runIds.length === 2,
+      `summary aggregates both shard runs (${counts.runIds.length})`,
+    );
+    check(
+      counts.tests === 2 && counts.failed === 0,
+      `all sharded tests green (${counts.passed}/${counts.tests})`,
+    );
+    check(counts.heals >= 6, `heals from both shards merged into one audit (${counts.heals})`);
+    check(
+      counts.unverifiedHeals >= 1 && sum.stdout.includes('unverified heal'),
+      'summary reports "passed with N unverified heals" (spec §6)',
+    );
+  }
+
+  // ---- Phase M: sentinel migrate — mechanical adoption (spec §3) -------------------
+  console.log('\nPhase M — sentinel migrate (vanilla Playwright spec):');
+  {
+    const vanillaDir = path.join(here, 'specs-vanilla-tmp');
+    rmSync(vanillaDir, { recursive: true, force: true });
+    mkdirSync(vanillaDir, { recursive: true });
+    writeFileSync(
+      path.join(vanillaDir, 'vanilla.spec.ts'),
+      `import { test, expect } from '@playwright/test';
+
+test('vanilla shopper completes checkout', async ({ page }) => {
+  await page.goto('/products');
+  await page.locator('#add-to-cart-1').click();
+  await page.getByTestId('go-checkout').click();
+  await page.getByLabel('Email', { exact: true }).fill('vanilla@example.com');
+  await page.locator('.btn-order').click();
+  await expect(page.getByText('Order confirmed')).toBeVisible();
+});
+`,
+    );
+    const mig = cli(['migrate', vanillaDir]);
+    check(
+      mig.status === 0 && /1 file\(s\) changed/.test(mig.stdout),
+      `sentinel migrate rewrote the spec (${mig.stdout.trim().split('\n').pop()?.slice(0, 60)})`,
+    );
+    const migrated = readFileSync(path.join(vanillaDir, 'vanilla.spec.ts'), 'utf8');
+    check(migrated.includes(`from '@sentinel/core'`), 'imports switched to @sentinel/core');
+    check(migrated.includes('{ page, s }'), 's fixture added to the test callback');
+    check(
+      (migrated.match(/intent: 'TODO'/g) ?? []).length === 5,
+      'all five interactions wrapped with intent TODO stubs',
+    );
+
+    await setProfile('baseline');
+    const migratedTarget = path.join(here, 'specs', 'migrated-tmp.spec.ts');
+    copyFileSync(path.join(vanillaDir, 'vanilla.spec.ts'), migratedTarget);
+    const run = runSuite(`p6-migrated-${stamp}`, null, {
+      args: ['--grep', '"vanilla shopper"'],
+    });
+    rmSync(migratedTarget, { force: true });
+    rmSync(vanillaDir, { recursive: true, force: true });
+    check(run.exit === 0, 'migrated spec runs green under the sentinel fixture');
+    {
+      const store = openStore();
+      const todoSteps = rows(
+        store,
+        "SELECT * FROM steps WHERE run_id = ? AND intent = 'TODO' AND status = 'passed'",
+        `p6-migrated-${stamp}`,
+      );
+      check(todoSteps.length >= 4, `TODO-intent steps recorded and cached (${todoSteps.length})`);
+      store.close();
+    }
+  }
+
+  // ---- Phase P: sentinel promote — heals back into specs (spec §4/§8) -------------
+  console.log('\nPhase P — sentinel promote (reviewed heals → spec diff):');
+  {
+    // Main DB holds Phase H state: two distinct add-to-cart originals healed to
+    // the SAME 'Add to bag' target (must be refused — would be ambiguous on the
+    // page) and one unique '.btn-order' → 'Submit order' heal (must promote).
+    const sandbox = path.join(here, '.sentinel-promote-sim');
+    rmSync(sandbox, { recursive: true, force: true });
+    mkdirSync(path.join(sandbox, 'specs'), { recursive: true });
+    copyFileSync(
+      path.join(here, 'specs', 'shop.spec.ts'),
+      path.join(sandbox, 'specs', 'shop.spec.ts'),
+    );
+
+    const dry = cli(['promote', '--dry-run', '--root', sandbox]);
+    check(dry.status === 0, 'promote --dry-run runs');
+    check(
+      /conflict/.test(dry.stdout) && /ambiguous/.test(dry.stdout),
+      'ambiguity guard: duplicate Add-to-bag targets refused with a warning',
+    );
+    check(
+      dry.stdout.includes(`locator('.btn-order')`) && dry.stdout.includes('Submit order'),
+      'unique heal planned: .btn-order → Submit order',
+    );
+    check(
+      readFileSync(path.join(sandbox, 'specs', 'shop.spec.ts'), 'utf8').includes('.btn-order'),
+      'dry-run left the spec untouched',
+    );
+
+    const write = cli(['promote', '--root', sandbox]);
+    check(
+      write.status === 0 && /Promoted 1 locator group/.test(write.stdout),
+      'promote applied the reviewed heal to the working tree',
+    );
+    const specAfter = readFileSync(path.join(sandbox, 'specs', 'shop.spec.ts'), 'utf8');
+    check(
+      specAfter.includes(`page.getByRole('button', { name: 'Submit order', exact: true })`),
+      'spec now uses the healed locator',
+    );
+    check(!specAfter.includes('.btn-order'), 'broken original locator removed');
+    check(
+      specAfter.includes('Order confirmed') && specAfter.includes("text: '2'"),
+      'assertion expected values untouched (golden rule)',
+    );
+
+    const again = cli(['promote', '--dry-run', '--root', sandbox]);
+    check(/Nothing to promote/.test(again.stdout), 'idempotent: promoted heals are not re-planned');
+    {
+      const store = openStore();
+      const promoted = rows(store, 'SELECT * FROM heals WHERE promoted = 1');
+      check(promoted.length >= 1, `heals marked promoted in the audit trail (${promoted.length})`);
+      store.close();
+    }
+    rmSync(sandbox, { recursive: true, force: true });
   }
 
   console.log(`\n${'='.repeat(60)}`);

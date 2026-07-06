@@ -1,3 +1,5 @@
+export { buildRunSummary, type SummaryData, type SummaryOptions } from './summary.js';
+
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { sha1, type SentinelStore } from '@sentinel/core';

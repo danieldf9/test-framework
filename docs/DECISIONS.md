@@ -304,3 +304,70 @@ and the LLM cost summary grouped by provider × purpose. Heal cards show the old
 locator diff, tier/mode/confidence badges, LLM reasoning, and before/after screenshots
 COPIED into `report/assets/` so the folder is a portable CI artifact with no references
 back into `.sentinel/`.
+
+## D33 — Flake detection is opt-out for app-mutation scenarios
+
+Statistical flake detection assumes the app under test is constant for a given test-repo
+git SHA. The chaos harness (and any app deployed on its own cadence) violates that
+deliberately — once this repo became a git repository, "app mutated, SHA unchanged" became
+indistinguishable from flakiness and would have quarantined intentional chaos mutations.
+`diagnosis.flakeDetection` (default **true**) gates both classification and the `@flaky`
+tag; the example config disables it with an explanatory comment. Stats are always
+recorded either way.
+
+## D34 — CI cache strategy: shard-scoped run ids + idempotent JSON merges
+
+Each CI shard runs with `SENTINEL_RUN_ID=gh-<run_id>-shard-<n>` (`sentinel run` honors the
+env var) and its own DB, seeded by importing the cached JSON export. The merge job imports
+every shard export into one DB — safe because D11's merge semantics append history only
+for unknown run ids and upsert `locator_cache` by newest `lastVerifiedAt`. `sentinel
+summary --run-prefix gh-<run_id>-` then aggregates the shards into the single PR comment.
+What gets cached between workflow runs is the JSON export, not the SQLite file — portable
+per spec §7, and immune to better-sqlite3 platform/version drift. The whole loop is
+executed for real (two simulated shard machines) in chaos Phase I.
+
+## D35 — CI escalation channel details
+
+- One summary comment per PR, updated in place via an HTML marker — never a comment flood.
+- Push builds with pending questions open/update a single `sentinel-needs-human` issue.
+- A `sentinel / needs-human` check run is created ONLY when questions are pending, with
+  conclusion `action_required` (not a fake green, not a noisy red; the test job itself
+  reflects test outcomes).
+- `/sentinel choose <id> <label>` is honored only from OWNER/MEMBER/COLLABORATOR comments,
+  and the comment body is passed to the parser via env (no shell interpolation of
+  attacker-controlled text). The follow-up workflow restores the cache export, applies the
+  answer through the same `applyEscalationAnswer` path as the local CLI (D28), saves the
+  cache, and replies with the outcome.
+- Workflows cannot execute locally, so `scripts/validate-workflows.mjs` asserts their
+  structural contracts (triggers, guards, cache/artifact/comment steps) and chaos Phase I
+  executes the underlying CLI mechanics end-to-end.
+
+## D36 — Promote: cache is the source, guards make it reviewable
+
+`sentinel promote` takes the LATEST heal per (testId, stepId) (default AUTO + HUMAN;
+UNVERIFIED needs `--include-unverified`) for the broken original locator, and writes the
+**cache primary** back (the cache is the source of truth; heal rows are its audit trail).
+Matching is whitespace/quote-tolerant so recorded `getByLabel('Email', { exact: true })`
+finds authored `getByLabel("Email", {exact:true})`. Two deterministic guards refuse unsafe
+promotions: the same original healing to different targets (contradiction), and different
+originals healing to the SAME target — promoting that would put an ambiguous locator in
+the spec (e.g. three product buttons all resolving to `getByRole('button', { name: 'Add
+to bag' })`; the cache heals those per-step via fingerprint disambiguation, raw Playwright
+cannot). Only the locator expression is replaced — intents and assertion expected values
+are untouched. Applied heals get `promoted = 1` (idempotent). `--branch` wraps the write
+in `git checkout -b` + commit for PR review; default writes the working tree and defers to
+`git diff`. Promotion is a human-gated door: run the suite after promoting.
+
+## D37 — Migrate: AST-guided text splices, conservative subset
+
+The codemod parses specs with the TypeScript compiler API but applies POSITION-BASED text
+edits instead of reprinting the AST — untouched code stays byte-identical, so the diff a
+team reviews contains only real changes. It wraps exactly what `s.*` can express (goto,
+option-less click, single-value fill, `toBeVisible`, `toHaveText`, plus the
+`page.click(sel)`/`page.fill(sel, v)` shorthands via `page.locator(sel)`), rewrites
+`test`/`expect` imports to `@sentinel/core` (splitting mixed imports so `devices` etc.
+stay on `@playwright/test`), and adds `s` to touched callbacks' fixture destructuring.
+Everything else — `.not` assertions, option bags, dblclick — is left untouched and counted
+as skipped, because a migration that silently changes semantics is worse than one that
+asks for a little manual finishing. Stub intents are `intent: 'TODO'`: the suite runs
+immediately, and each TODO is a grep-able prompt to write the real semantic anchor.

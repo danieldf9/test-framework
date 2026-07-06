@@ -1,0 +1,51 @@
+# This repo's CI: framework quality gates + the full chaos-harness acceptance
+# test (fully offline — mock LLM), then the reusable Sentinel workflow running
+# the demo suite sharded with cache persistence.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: node scripts/validate-workflows.mjs
+      - run: pnpm test
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+        working-directory: examples/tests
+      - name: Chaos-harness acceptance test (spec §11.2)
+        run: pnpm chaos
+        env:
+          SENTINEL_LLM_PROVIDER: none
+
+  e2e:
+    # Exercises the reusable workflow for real: sharding, cache persistence,
+    # report artifact, summary comment. Runs deterministic-only unless the
+    # SENTINEL_LLM_API_KEY secret is configured (graceful degradation, spec §9).
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      checks: write
+    uses: ./.github/workflows/sentinel.yml
+    with:
+      working-directory: examples/tests
+      shard-list: '[1,2]'
+      shard-total: 2
+    secrets:
+      SENTINEL_LLM_API_KEY: ${{ secrets.SENTINEL_LLM_API_KEY }}

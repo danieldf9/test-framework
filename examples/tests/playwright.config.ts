@@ -3,7 +3,9 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './specs',
   timeout: 90_000,
-  fullyParallel: false,
+  // fullyParallel lets --shard split individual tests across CI shards;
+  // workers stays 1 so local runs remain strictly ordered.
+  fullyParallel: true,
   workers: 1,
   retries: 0,
   reporter: [['list']],

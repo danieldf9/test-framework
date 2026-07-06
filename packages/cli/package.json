@@ -12,16 +12,18 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "@sentinel/core": "workspace:*",
     "@sentinel/providers": "workspace:*",
     "@sentinel/report": "workspace:*",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "typescript": "^5.7.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "typescript": "^5.7.2"
+    "vitest": "^2.1.8"
   }
 }

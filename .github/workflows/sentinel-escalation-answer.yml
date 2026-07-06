@@ -1,0 +1,126 @@
+# Escalation-answer follow-up workflow (spec §6 CI channel).
+#
+# A maintainer replies to the Sentinel summary comment / needs-human issue with:
+#
+#   /sentinel choose <escalation-id> <label>     e.g. /sentinel choose 3 A
+#   /sentinel choose <escalation-id> REDESIGN
+#
+# This workflow parses the command, restores the locator-cache export, records
+# the answer (cached primary + HUMAN audit heal + few-shot context), saves the
+# updated cache, and replies with the result. Only OWNER/MEMBER/COLLABORATOR
+# comments are honored.
+name: sentinel-escalation-answer
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  answer:
+    if: >-
+      startsWith(github.event.comment.body, '/sentinel choose') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # This repo's demo suite lives here; adjust for your own project layout.
+      WORKDIR: examples/tests
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if [[ "$COMMENT_BODY" =~ ^/sentinel[[:space:]]+choose[[:space:]]+([0-9]+)[[:space:]]+([A-Za-z]+) ]]; then
+            echo "id=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "label=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cmd.outputs.valid == 'true'
+      - uses: pnpm/action-setup@v4
+        if: steps.cmd.outputs.valid == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.cmd.outputs.valid == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+        if: steps.cmd.outputs.valid == 'true'
+      - run: pnpm build
+        if: steps.cmd.outputs.valid == 'true'
+
+      - name: Restore locator cache
+        if: steps.cmd.outputs.valid == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.WORKDIR }}/.sentinel-ci/cache.json
+          key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            sentinel-cache-${{ github.ref_name }}-
+            sentinel-cache-
+
+      - name: Apply the human answer
+        if: steps.cmd.outputs.valid == 'true'
+        id: apply
+        working-directory: ${{ env.WORKDIR }}
+        continue-on-error: true
+        run: |
+          if [ -f .sentinel-ci/cache.json ]; then
+            npx sentinel db import .sentinel-ci/cache.json
+          fi
+          set +e
+          out=$(npx sentinel escalations --choose ${{ steps.cmd.outputs.id }} ${{ steps.cmd.outputs.label }} 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          {
+            echo "result<<SENTINEL_EOF"
+            echo "$out"
+            echo "SENTINEL_EOF"
+            echo "code=$code"
+          } >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - name: Save updated locator cache
+        if: steps.cmd.outputs.valid == 'true' && steps.apply.outputs.code == '0'
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          mkdir -p .sentinel-ci
+          npx sentinel db export --json .sentinel-ci/cache.json
+      - uses: actions/cache/save@v4
+        if: steps.cmd.outputs.valid == 'true' && steps.apply.outputs.code == '0'
+        with:
+          path: ${{ env.WORKDIR }}/.sentinel-ci/cache.json
+          key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Reply with the outcome
+        if: steps.cmd.outputs.valid == 'true'
+        uses: actions/github-script@v7
+        env:
+          RESULT: ${{ steps.apply.outputs.result }}
+          CODE: ${{ steps.apply.outputs.code }}
+        with:
+          script: |
+            const ok = process.env.CODE === '0';
+            const result = (process.env.RESULT || '(no output)').slice(0, 1500);
+            await github.rest.reactions.createForIssueComment({
+              ...context.repo,
+              comment_id: context.payload.comment.id,
+              content: ok ? 'rocket' : 'confused',
+            });
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: ok
+                ? `✅ **Sentinel** recorded the answer and updated the locator cache — the next run heals this step at Tier 0.\n\n\`\`\`\n${result}\n\`\`\``
+                : `❌ **Sentinel** could not apply that answer:\n\n\`\`\`\n${result}\n\`\`\``,
+            });

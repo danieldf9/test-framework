@@ -85,6 +85,27 @@ Author tests with `import { test } from '@sentinel/core'` and route interactions
 the `s` fixture (`s.goto`, `s.click`, `s.fill`, `s.expectVisible`, `s.expectText`,
 `s.step`). Run via:
 
+Adopting an existing suite is mechanical:
+
+```bash
+sentinel migrate e2e/        # wraps vanilla Playwright interactions with the
+                             # sentinel fixture, stub intents marked TODO —
+                             # the suite runs immediately; then replace each
+                             # TODO with a real semantic description
+```
+
+When heals have accumulated and been reviewed, write them back into your specs:
+
+```bash
+sentinel promote --dry-run   # preview the locator diff
+sentinel promote             # apply to the working tree (review with git diff)
+sentinel promote --branch sentinel/promote-heals   # branch + commit for a PR
+```
+
+Promote refuses anything unsafe: contradictory heals, or promotions that would put an
+ambiguous locator into the spec (different elements healing to the same target). Spec
+files are never touched by any other command.
+
 ```bash
 sentinel run [--grep <p>] [--project <name>] [--heal auto|suggest|off]
 sentinel report [--out dir]              # static HTML: results, heals with
@@ -172,6 +193,23 @@ Vision-capable providers additionally enable **Tier 3**: the sanitized failure s
 cross-checked against the DOM answer — agreement boosts confidence, disagreement lowers
 it. Providers with `supportsVision: false` degrade gracefully to DOM-only healing.
 
+## CI (GitHub Actions)
+
+`sentinel init` scaffolds a ready-to-use workflow for your project. This repo also ships a
+reusable workflow ([.github/workflows/sentinel.yml](.github/workflows/sentinel.yml)):
+
+- **Locator cache persists across runs** via `actions/cache` + the portable JSON export —
+  shards import it, heal from it, and the merge job saves the updated cache back.
+- **Sharded**: each shard gets its own run id; `sentinel summary --run-prefix` aggregates
+  them into one PR comment (updated in place, never a comment flood) and the step summary.
+- **HTML report + heal screenshots** uploaded as artifacts.
+- **Escalations in CI**: pending questions appear in the summary comment (or a
+  `sentinel-needs-human` issue on push builds) with an `action_required` check run — not a
+  fake green, not a noisy red. A maintainer replies `/sentinel choose <id> <label>` and the
+  companion workflow records the answer into the cache; the next run heals at Tier 0.
+- **Only secret: the LLM API key.** Without it, healing degrades to deterministic
+  Tiers 0–1.
+
 ## Repository layout
 
 ```
@@ -194,10 +232,13 @@ pnpm lint           # eslint + prettier config
 pnpm chaos          # full integration acceptance test
 ```
 
-Project status: **Phases 1–4 complete** (fixture + SQLite + Tiers 0–1; all four provider
-adapters; Tiers 2–3 with vision cross-check; LLM-arbitrated diagnosis; escalation
-answering; static HTML report. Chaos harness green across 9 phases; Tier 2 verified live
-on Gemma 4 31B and the native Gemini adapter + vision verified live on gemini-2.5-flash).
-Remaining: GitHub Actions integration (Phase 5), migrate/promote commands (Phase 6). See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the phase plan and
-[docs/DECISIONS.md](docs/DECISIONS.md) for design rationale.
+Project status: **all six spec phases complete.** Core fixture + SQLite state + Tiers 0–1;
+four provider adapters (Anthropic, OpenAI, Gemini, openai-compatible) behind one
+interface; Tier 2 DOM + Tier 3 vision healing with cross-checks; deterministic-first
+diagnosis with LLM arbitration; confidence-tiered autonomy with human escalation (CLI and
+`/sentinel choose` CI comments); static HTML report; sharded GitHub Actions integration
+with locator-cache persistence; `migrate` codemod and `promote` write-back. The chaos
+harness proves the acceptance criteria end-to-end across 12 phases (offline, deterministic);
+Tier 2 verified live on Gemma 4 31B and native Gemini + vision verified live on
+gemini-2.5-flash. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline and
+[docs/DECISIONS.md](docs/DECISIONS.md) for the 37 recorded design decisions.

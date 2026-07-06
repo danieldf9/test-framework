@@ -7,15 +7,15 @@ autonomy, and records everything in SQLite for replay, audit, and promotion.
 
 ## Package layout
 
-| Package               | Purpose                                                                                                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `@sentinel/core`      | `test` fixture (`s.*` actions), diagnosis classifier, Tier 0–1 healing, SQLite store, artifact capture, sanitizer     |
-| `@sentinel/cli`       | `sentinel` command: `init`, `run`, `db export/import`, `doctor` (more per phase plan)                                 |
-| `@sentinel/providers` | `LLMProvider` abstraction, openai-compatible adapter (+ 'openai' preset), retries/backoff/circuit breaker, cost hooks |
-| `@sentinel/report`    | Static self-contained HTML report: results, heals with before/after screenshots, flake dashboard, LLM costs           |
-| `examples/demo-app`   | Offline demo shop, server-side mutation profiles, `POST /__chaos` switch                                              |
-| `examples/mock-llm`   | Deterministic OpenAI-compatible mock server used by the chaos harness (offline Tier 2 proof)                          |
-| `examples/tests`      | Intent-annotated example suite + chaos-harness integration test                                                       |
+| Package               | Purpose                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `@sentinel/core`      | `test` fixture (`s.*` actions), diagnosis classifier, Tier 0–1 healing, SQLite store, artifact capture, sanitizer         |
+| `@sentinel/cli`       | `sentinel` command: `init`, `run`, `report`, `summary`, `escalations`, `migrate`, `promote`, `db export/import`, `doctor` |
+| `@sentinel/providers` | `LLMProvider` abstraction, openai-compatible adapter (+ 'openai' preset), retries/backoff/circuit breaker, cost hooks     |
+| `@sentinel/report`    | Static self-contained HTML report: results, heals with before/after screenshots, flake dashboard, LLM costs               |
+| `examples/demo-app`   | Offline demo shop, server-side mutation profiles, `POST /__chaos` switch                                                  |
+| `examples/mock-llm`   | Deterministic OpenAI-compatible mock server used by the chaos harness (offline Tier 2 proof)                              |
+| `examples/tests`      | Intent-annotated example suite + chaos-harness integration test                                                           |
 
 ## Step execution & healing pipeline
 
@@ -96,6 +96,22 @@ get repair prompts, then count as low confidence). All §4/§6 guards — assert
 ambiguity, confidence bands, plus a contradictory-signal cap — apply to LLM heals exactly
 as to deterministic ones.
 
+## CI integration (GitHub Actions)
+
+`.github/workflows/sentinel.yml` is a reusable workflow (`workflow_call`): restores the
+locator cache (portable JSON export) from `actions/cache`, runs shards with per-shard run
+ids and DBs, uploads shard state + heal screenshots, then a merge job imports every shard
+export (idempotent by D11), generates the HTML report artifact, writes the aggregated
+summary to `$GITHUB_STEP_SUMMARY`, upserts a single PR comment (or a
+`sentinel-needs-human` issue on push builds), raises an `action_required` check run when
+questions are pending, and saves the merged cache. The only secret is the LLM key; absent,
+healing runs Tiers 0–1.
+
+`.github/workflows/sentinel-escalation-answer.yml` listens for maintainer comments
+matching `/sentinel choose <id> <label>`, applies the answer through the same code path as
+the local CLI, persists the updated cache, and replies with the outcome. `sentinel init`
+scaffolds a self-contained single-job variant for end-user projects.
+
 ## Security guardrails in this phase
 
 - DOM snapshots sanitized **in-page** before capture: input values stripped, secret-pattern
@@ -112,5 +128,5 @@ as to deterministic ones.
 | 2     | Provider abstraction, OpenAI-compatible adapter, Tier 2                        | ✅ complete — chaos harness green (incl. mock-LLM + dead-endpoint phases)                             |
 | 3     | LLM-assisted classifier, confidence policy integration, CLI escalation answers | ✅ complete — chaos green (ambiguous-regression + answer-replay phases); verified live on Gemma 4 31B |
 | 4     | Anthropic/OpenAI/Gemini adapters, Tier 3 vision, HTML report                   | ✅ complete — chaos green (vision + report phases); native Gemini adapter + vision verified live      |
-| 5     | GitHub Actions workflows, cache persistence, comment escalation                | ⏳                                                                                                    |
-| 6     | `migrate` codemod, `promote`, docs polish                                      | ⏳                                                                                                    |
+| 5     | GitHub Actions workflows, cache persistence, comment escalation                | ✅ complete — chaos green incl. CI-simulation phase; workflow contracts validated                     |
+| 6     | `migrate` codemod, `promote`, docs polish                                      | ✅ complete — chaos green (migrate-run + promote phases); **all spec phases delivered**               |
