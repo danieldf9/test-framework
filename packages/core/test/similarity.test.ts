@@ -14,6 +14,14 @@ describe('levenshtein', () => {
     expect(levenshtein('', 'abc')).toBe(3);
     expect(levenshtein('same', 'same')).toBe(0);
   });
+
+  it('handles strings longer than the initial row buffer', () => {
+    const a = 'x'.repeat(200);
+    const b = 'x'.repeat(150) + 'y'.repeat(50);
+    expect(levenshtein(a, b)).toBe(50);
+    // Buffer reuse across calls must not leak state between invocations.
+    expect(levenshtein('kitten', 'sitting')).toBe(3);
+  });
 });
 
 describe('tokenSimilarity', () => {

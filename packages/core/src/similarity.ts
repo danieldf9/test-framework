@@ -10,20 +10,34 @@ export function tokenize(s: string | null | undefined): string[] {
     .filter((t) => t.length > 0);
 }
 
+// Row buffers reused across calls: a heavy Tier 1 heal runs levenshtein
+// thousands of times in a burst, and per-call array allocation is pure GC
+// pressure. Safe to share at module scope because the function is synchronous
+// and non-reentrant.
+let levPrev = new Uint32Array(64);
+let levCurr = new Uint32Array(64);
+
 export function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
-  let prev = new Array<number>(b.length + 1);
-  let curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  const width = b.length + 1;
+  if (levPrev.length < width) {
+    levPrev = new Uint32Array(width * 2);
+    levCurr = new Uint32Array(width * 2);
+  }
+  let prev = levPrev;
+  let curr = levCurr;
+  for (let j = 0; j < width; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i;
     for (let j = 1; j <= b.length; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + cost);
     }
-    [prev, curr] = [curr, prev];
+    const tmp = prev;
+    prev = curr;
+    curr = tmp;
   }
   return prev[b.length]!;
 }

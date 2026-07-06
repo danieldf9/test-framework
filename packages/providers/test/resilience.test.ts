@@ -84,4 +84,27 @@ describe('withResilience', () => {
     await expect(p.complete(req)).rejects.toThrow();
     expect(p.circuitOpen).toBe(false);
   });
+
+  it('concurrent failures trip the circuit once and stop in-flight retries', async () => {
+    let calls = 0;
+    const inner: LLMProvider = {
+      name: 'fake',
+      model: 'fake-1',
+      supportsVision: false,
+      async complete() {
+        calls++;
+        throw new Error(`boom ${calls}`);
+      },
+    };
+    const onCircuitOpen = vi.fn();
+    const p = withResilience(inner, { ...baseOpts, maxRetries: 10 }, { onCircuitOpen });
+
+    const results = await Promise.allSettled([p.complete(req), p.complete(req)]);
+    expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    expect(p.circuitOpen).toBe(true);
+    expect(onCircuitOpen).toHaveBeenCalledTimes(1);
+    // Once the breaker trips at 3 shared failures, the other in-flight request
+    // must fail fast instead of burning its remaining 10 retries.
+    expect(calls).toBeLessThanOrEqual(4);
+  });
 });

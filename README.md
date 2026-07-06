@@ -46,6 +46,10 @@ test('checkout flow', async ({ page, s }) => {
    CI. Spec files are never silently edited; `sentinel promote` (Phase 6) writes reviewed
    heals back as a diff.
 
+> **New to Sentinel?** The complete user manual — step-by-step onboarding, what it can
+> and cannot do, full configuration/CLI reference, and a troubleshooting guide — lives at
+> [docs/USER-MANUAL.md](docs/USER-MANUAL.md).
+
 ## Quickstart
 
 Requires Node 20+ and pnpm.
@@ -219,7 +223,7 @@ packages/cli        @sentinel/cli — sentinel command
 examples/demo-app   offline demo shop with chaos mutation profiles
 examples/mock-llm   deterministic OpenAI-compatible mock (offline Tier 2 acceptance test)
 examples/tests      example suite + chaos-harness integration test
-docs/               ARCHITECTURE.md (pipeline diagram), DECISIONS.md
+docs/               USER-MANUAL.md (full manual + troubleshooting), ARCHITECTURE.md, DECISIONS.md
 ```
 
 ## Development

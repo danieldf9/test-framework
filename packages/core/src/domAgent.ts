@@ -41,7 +41,14 @@ export function sentinelDomAgent(el: Element, opts: DomAgentOptions): unknown {
   function isVisible(e: Element): boolean {
     if (opts.assumeVisible) return true;
     const rect = e.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
+    if (rect.width <= 0 || rect.height <= 0) {
+      // display:contents elements generate no box of their own, so their rect
+      // is zero even though their children render — don't drop them (a test id
+      // placed on such a wrapper would otherwise vanish from collection).
+      if (!win) return false;
+      const style = win.getComputedStyle(e);
+      return style.display === 'contents' && style.visibility !== 'hidden';
+    }
     if (!win) return true;
     const style = win.getComputedStyle(e);
     return style.visibility !== 'hidden' && style.display !== 'none';
@@ -215,8 +222,14 @@ export function sentinelDomAgent(el: Element, opts: DomAgentOptions): unknown {
       out.push(fingerprintOf(e));
     }
     // Text-bearing leaves: assertion targets (messages, prices, statuses).
-    for (const e of Array.from(doc.body.querySelectorAll('*'))) {
-      if (out.length >= max) break;
+    // TreeWalker instead of querySelectorAll('*'): on large SPAs the latter
+    // materializes the entire DOM as one array; the walker visits nodes lazily
+    // and stops as soon as the element budget is reached.
+    const walker = doc.createTreeWalker(doc.body, 0x1 /* NodeFilter.SHOW_ELEMENT */);
+    while (out.length < max) {
+      const node = walker.nextNode();
+      if (!node) break;
+      const e = node as Element;
       if (seen.has(e)) continue;
       if (e.childElementCount > 0) continue;
       const tag = e.tagName.toLowerCase();

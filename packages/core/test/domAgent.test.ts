@@ -74,6 +74,25 @@ describe('sentinelDomAgent collect', () => {
     }) as ElementFingerprint[];
     expect(list.length).toBeLessThanOrEqual(3);
   });
+
+  it('treats display:contents wrappers as visible despite their zero-size box', () => {
+    // jsdom has no layout, so every rect is 0x0 — exactly the condition a real
+    // display:contents element hits in the browser. Without assumeVisible, only
+    // the display:contents wrapper may survive the visibility check.
+    const doc = new JSDOM(`<!doctype html><html><body>
+      <div data-testid="wrapper" style="display: contents"><button>Go</button></div>
+      <div data-testid="hidden-wrapper" style="display: contents; visibility: hidden"><button>No</button></div>
+      <div data-testid="plain">zero-size box</div>
+    </body></html>`).window.document;
+    const list = sentinelDomAgent(doc.body, {
+      cmd: 'collect',
+      testIdAttribute: 'data-testid',
+    }) as ElementFingerprint[];
+    const ids = list.map((f) => f.testId);
+    expect(ids).toContain('wrapper');
+    expect(ids).not.toContain('hidden-wrapper');
+    expect(ids).not.toContain('plain');
+  });
 });
 
 describe('sentinelDomAgent sanitize (spec §10)', () => {

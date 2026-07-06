@@ -69,7 +69,7 @@ export function withResilience(
       return open;
     },
     async complete(request: LLMRequest): Promise<LLMResponse> {
-      if (open) {
+      const failFast = (): never => {
         const err = new CircuitOpenError(inner.name, consecutiveFailures);
         record(request, {
           inputTokens: 0,
@@ -79,16 +79,23 @@ export function withResilience(
           error: err.message,
         });
         throw err;
-      }
+      };
+      if (open) failFast();
       let lastError: Error = new Error('no attempts made');
       for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
         if (attempt > 0) {
           await new Promise((r) => setTimeout(r, opts.backoffBaseMs * 2 ** (attempt - 1)));
         }
+        // A concurrent request (e.g. Promise.all of several heals) may have
+        // tripped the breaker while this one awaited — stop retrying too.
+        if (open) failFast();
         const started = Date.now();
         try {
           const response = await inner.complete(request);
-          consecutiveFailures = 0;
+          // The circuit stays open for the rest of the run: a straggler success
+          // from a request that was in flight when it tripped must not zero the
+          // failure count reported by subsequent CircuitOpenErrors.
+          if (!open) consecutiveFailures = 0;
           record(request, {
             inputTokens: response.inputTokens,
             outputTokens: response.outputTokens,
@@ -108,8 +115,10 @@ export function withResilience(
             error: lastError.message.slice(0, 500),
           });
           if (consecutiveFailures >= opts.circuitBreakerThreshold) {
-            open = true;
-            hooks.onCircuitOpen?.();
+            if (!open) {
+              open = true;
+              hooks.onCircuitOpen?.();
+            }
             break;
           }
         }
