@@ -60,6 +60,10 @@ wrong.
 28. [Common errors and what they mean](#28-common-errors-and-what-they-mean)
 29. [FAQ](#29-faq)
 
+**Appendix**
+
+- [AI agent operations (the sentinel-agent skill)](#appendix--ai-agent-operations-the-sentinel-agent-skill)
+
 ---
 
 # Part 1 — Understanding Sentinel
@@ -1052,6 +1056,66 @@ healing.
 **Q: How do I explain a heal in a bug triage?**
 Open the report: old locator → new locator, tier, confidence, reasoning, and before/after
 screenshots. Every heal also records the git SHA it happened on.
+
+---
+
+# Appendix — AI agent operations (the sentinel-agent skill)
+
+This repository ships a **Claude Code skill** at
+[.claude/skills/sentinel-agent/](../.claude/skills/sentinel-agent/SKILL.md) that turns an
+AI coding agent into a Sentinel operator. Anyone who opens the repo in Claude Code gets
+it automatically — no installation step. It exists so that routine Sentinel work
+(status checks, triage, heal review, onboarding) can be delegated to an agent in natural
+language while the safety-critical decisions stay with humans.
+
+## What the agent can do with it
+
+The skill covers the full lifecycle, end to end:
+
+- **Integrate a new project from zero** — phased runbook: install (npm, or local
+  `file:` links from a built clone while the packages are unpublished), `sentinel init`,
+  config decisions, test adoption, the mandatory baseline green run, CI setup, optional
+  LLM enablement — each phase with a verifiable checkpoint.
+- **Migrate an existing suite** — drive `sentinel migrate`, then **write the intent
+  strings**: the skill contains the full intent-authoring guide (quality rules,
+  per-element patterns, anti-patterns), so the agent fills `intent: 'TODO'` stubs and
+  authors new `s.*` tests with proper healing anchors. Intents are written directly into
+  spec files and reviewed like any code change via git diff; the agent always finishes
+  with the baseline run that captures fingerprints.
+- **Operate and inspect** — run suites, read run summaries, and query state the CLI
+  doesn't expose: the skill bundles a read-only script
+  (`scripts/sentinel-query.mjs`) with views for runs, heals (with confidence and
+  before/after screenshot paths), pending escalations, flaky tests, and LLM spend —
+  plain Node + JSON output, so any tool (not just Claude) can use it.
+- **Triage failures** — a decision tree keyed to the diagnosis classifications
+  (`PRODUCT_REGRESSION` → investigate as a real bug first; `ENVIRONMENT` → check the
+  app; `UNKNOWN` → establish a baseline; etc.).
+- **Review unverified heals** — compare intent vs. new locator and read the
+  before/after screenshots, then report a verdict per heal.
+- **Handle escalations and promotions safely** — the skill presents escalation
+  candidates with a recommendation and evidence, and previews promotion diffs.
+
+## What the agent will NOT do (guardrails baked into the skill)
+
+- Never answer an escalation or run a non-dry-run `sentinel promote` without explicit
+  human approval — those actions permanently rewire what a test targets.
+- Never bypass the golden rule: no threshold-raising, guard-disabling, or assertion
+  rewording to make a `PRODUCT_REGRESSION` green.
+- Never delete `.sentinel/` (the healing baseline and audit history) or put secrets in
+  config files.
+- Flags before rewording an existing intent (rewording orphans that step's healing
+  history).
+
+## How to use it
+
+Open the repository in Claude Code and ask in plain language, e.g. "check sentinel
+status", "run the sentinel tests and triage failures", "review the unverified heals",
+"fill in the TODO intents in e2e/", "integrate sentinel into ../my-app". The skill
+auto-triggers on these phrases. The skill's own documentation lives beside it:
+[SKILL.md](../.claude/skills/sentinel-agent/SKILL.md) (quick reference and guardrails)
+plus references for [workflows](../.claude/skills/sentinel-agent/references/workflows.md),
+[project integration](../.claude/skills/sentinel-agent/references/project-integration.md),
+and [intent authoring](../.claude/skills/sentinel-agent/references/intent-authoring.md).
 
 ---
 

@@ -214,6 +214,19 @@ reusable workflow ([.github/workflows/sentinel.yml](.github/workflows/sentinel.y
 - **Only secret: the LLM API key.** Without it, healing degrades to deterministic
   Tiers 0–1.
 
+## AI agent operations
+
+The repo ships a Claude Code skill
+([.claude/skills/sentinel-agent](.claude/skills/sentinel-agent/SKILL.md)) that turns an
+AI coding agent into a Sentinel operator covering the whole lifecycle: integrating a new
+project (npm or local-link install, config, baseline), migrating suites and **authoring
+intent strings** to the framework's quality rules, running and triaging suites, reviewing
+heals with before/after screenshots, and handling escalations/promotions — with human
+approval required for anything that rewires a test, and the golden rule never bypassed.
+It bundles a read-only state-query script (runs / heals / escalations / flaky / LLM
+spend) that any tool can call. Details:
+[user manual appendix](docs/USER-MANUAL.md#appendix--ai-agent-operations-the-sentinel-agent-skill).
+
 ## Repository layout
 
 ```
@@ -224,6 +237,7 @@ examples/demo-app   offline demo shop with chaos mutation profiles
 examples/mock-llm   deterministic OpenAI-compatible mock (offline Tier 2 acceptance test)
 examples/tests      example suite + chaos-harness integration test
 docs/               USER-MANUAL.md (full manual + troubleshooting), ARCHITECTURE.md, DECISIONS.md
+.claude/skills/     sentinel-agent — Claude Code skill: AI-agent operations for Sentinel
 ```
 
 ## Development
