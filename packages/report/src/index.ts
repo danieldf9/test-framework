@@ -1,8 +1,15 @@
 export { buildRunSummary, type SummaryData, type SummaryOptions } from './summary.js';
+export * from './queries.js';
 
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { sha1, type SentinelStore } from '@sentinel/core';
+import {
+  queryFlakeStats,
+  queryLlmCosts,
+  queryRunDetail,
+  queryRunsOverview,
+} from './queries.js';
 
 export interface ReportOptions {
   outDir: string;
@@ -13,10 +20,6 @@ export interface ReportOptions {
 export interface ReportResult {
   indexPath: string;
   runsIncluded: number;
-}
-
-interface Row {
-  [key: string]: unknown;
 }
 
 function esc(v: unknown): string {
@@ -114,65 +117,39 @@ export function generateReport(store: SentinelStore, opts: ReportOptions): Repor
     return `assets/${name}`;
   };
 
-  const q = (sql: string, ...args: unknown[]): Row[] => store.db.prepare(sql).all(...args) as Row[];
-
-  const runs = q('SELECT * FROM runs ORDER BY started_at DESC LIMIT ?', opts.limitRuns ?? 20);
+  const overviews = queryRunsOverview(store, opts.limitRuns ?? 20);
 
   // ---- Runs overview ---------------------------------------------------------
-  const runRows = runs
-    .map((r) => {
-      const id = r.id as string;
-      const tests = q('SELECT COUNT(*) n FROM test_results WHERE run_id = ?', id)[0]!.n as number;
-      const passed = q(
-        "SELECT COUNT(*) n FROM test_results WHERE run_id = ? AND status LIKE 'passed%'",
-        id,
-      )[0]!.n as number;
-      const heals = q(
-        "SELECT COALESCE(mode,'') mode, COUNT(*) n FROM heals WHERE run_id = ? GROUP BY mode",
-        id,
-      );
-      const healSummary = heals.map((h) => `${h.n}× ${String(h.mode)}`).join(', ') || '—';
-      const esc2 = q('SELECT COUNT(*) n FROM escalations WHERE run_id = ?', id)[0]!.n as number;
-      const cost = q(
-        'SELECT COALESCE(SUM(cost_usd),0) c, COUNT(*) n FROM llm_calls WHERE run_id = ?',
-        id,
-      )[0]!;
-      const meta = (() => {
-        try {
-          return JSON.parse((r.meta_json as string) ?? '{}');
-        } catch {
-          return {};
-        }
-      })();
+  const runRows = overviews
+    .map((o) => {
+      const healSummary = o.heals.map((h) => `${h.count}× ${h.mode}`).join(', ') || '—';
       return `<tr>
-        <td><code>${esc(id)}</code>${meta.healingUnavailable ? ' <span class="badge b-red">LLM circuit open</span>' : ''}</td>
-        <td>${statusBadge(String(r.status ?? 'in-progress'))}</td>
-        <td>${ts(r.started_at)}</td>
-        <td>${passed}/${tests}</td>
+        <td><code>${esc(o.id)}</code>${o.healingUnavailable ? ' <span class="badge b-red">LLM circuit open</span>' : ''}</td>
+        <td>${statusBadge(String(o.status ?? 'in-progress'))}</td>
+        <td>${ts(o.startedAt)}</td>
+        <td>${o.passed}/${o.tests}</td>
         <td>${esc(healSummary)}</td>
-        <td>${esc2}</td>
-        <td>${(cost.n as number) > 0 ? `${cost.n} calls / $${(cost.c as number).toFixed(4)}` : '—'}</td>
+        <td>${o.escalations}</td>
+        <td>${o.llmCalls > 0 ? `${o.llmCalls} calls / $${o.llmCostUsd.toFixed(4)}` : '—'}</td>
       </tr>`;
     })
     .join('\n');
 
   // ---- Per-run detail ---------------------------------------------------------
-  const runDetails = runs
-    .map((r) => {
-      const id = r.id as string;
-      const tests = q('SELECT * FROM test_results WHERE run_id = ?', id);
-      const testRows = tests
+  const runDetails = overviews
+    .map((o) => {
+      const detail = queryRunDetail(store, o.id);
+      const testRows = detail.tests
         .map(
           (t) =>
-            `<tr><td>${esc(t.title)}</td><td>${statusBadge(String(t.status))}</td><td>${esc(t.duration_ms)}ms</td><td>${t.flaky_tagged ? '<span class="badge b-amber">@flaky</span>' : ''}</td></tr>`,
+            `<tr><td>${esc(t.title)}</td><td>${statusBadge(String(t.status))}</td><td>${esc(t.durationMs)}ms</td><td>${t.flakyTagged ? '<span class="badge b-amber">@flaky</span>' : ''}</td></tr>`,
         )
         .join('\n');
 
-      const heals = q('SELECT * FROM heals WHERE run_id = ? ORDER BY ts', id);
-      const healCards = heals
+      const healCards = detail.heals
         .map((h) => {
-          const before = copyShot(h.screenshot_before);
-          const after = copyShot(h.screenshot_after);
+          const before = copyShot(h.screenshotBefore);
+          const after = copyShot(h.screenshotAfter);
           const shots =
             before || after
               ? `<div class="shots">
@@ -183,78 +160,50 @@ export function generateReport(store: SentinelStore, opts: ReportOptions): Repor
           return `<div class="heal">
             ${modeBadge(String(h.mode))}<span class="badge b-gray">tier ${esc(h.tier)}</span><span class="badge b-gray">conf ${Number(h.confidence).toFixed(2)}</span>
             <strong>${esc(h.intent)}</strong>
-            <div class="loc"><code>${esc(h.old_locator)}</code><span class="arrow">→</span><code>${esc(h.new_locator)}</code></div>
+            <div class="loc"><code>${esc(h.oldLocator)}</code><span class="arrow">→</span><code>${esc(h.newLocator)}</code></div>
             <div class="reason">${esc(h.reasoning)}</div>
             ${shots}
           </div>`;
         })
         .join('\n');
 
-      const escalations = q('SELECT * FROM escalations WHERE run_id = ?', id);
-      const escRows = escalations
+      const escRows = detail.escalations
         .map((e) => {
-          const question = (() => {
-            try {
-              return JSON.parse(e.question_json as string);
-            } catch {
-              return { question: '(unparseable)' };
-            }
-          })();
-          return `<tr><td>#${esc(e.id)}</td><td>${esc(question.intent ?? '')}</td><td>${esc(question.question ?? '')}</td><td>${e.status === 'pending' ? '<span class="badge b-amber">pending</span>' : `<span class="badge b-blue">answered</span> ${esc(e.answer)} <em>by ${esc(e.answered_by)}</em>`}</td></tr>`;
+          const intent = e.question?.intent ?? '';
+          const questionText = e.question?.question ?? '(unparseable)';
+          return `<tr><td>#${esc(e.id)}</td><td>${esc(intent)}</td><td>${esc(questionText)}</td><td>${e.status === 'pending' ? '<span class="badge b-amber">pending</span>' : `<span class="badge b-blue">answered</span> ${esc(e.answer)} <em>by ${esc(e.answeredBy)}</em>`}</td></tr>`;
         })
         .join('\n');
 
       return `<details>
-        <summary><code>${esc(id)}</code> — ${statusBadge(String(r.status ?? 'in-progress'))} ${heals.length} heal(s), ${escalations.length} escalation(s)</summary>
+        <summary><code>${esc(o.id)}</code> — ${statusBadge(String(o.status ?? 'in-progress'))} ${detail.heals.length} heal(s), ${detail.escalations.length} escalation(s)</summary>
         <div>
           <h2>Tests</h2>
           <table><tr><th>Test</th><th>Status</th><th>Duration</th><th></th></tr>${testRows || '<tr><td colspan="4">none recorded</td></tr>'}</table>
-          ${heals.length ? `<h2>Heals</h2>${healCards}` : ''}
-          ${escalations.length ? `<h2>Escalations</h2><table><tr><th>#</th><th>Intent</th><th>Question</th><th>Status</th></tr>${escRows}</table>` : ''}
+          ${detail.heals.length ? `<h2>Heals</h2>${healCards}` : ''}
+          ${detail.escalations.length ? `<h2>Escalations</h2><table><tr><th>#</th><th>Intent</th><th>Question</th><th>Status</th></tr>${escRows}</table>` : ''}
         </div>
       </details>`;
     })
     .join('\n');
 
   // ---- Flake dashboard ----------------------------------------------------------
-  const flakeRows = q(
-    `SELECT test_id,
-            COUNT(*) total,
-            SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) passes,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) fails,
-            COUNT(DISTINCT git_sha) shas
-     FROM flake_stats GROUP BY test_id ORDER BY fails DESC`,
-  )
+  const flakeRows = queryFlakeStats(store)
     .map((f) => {
-      const flaky = q(
-        `SELECT COUNT(*) n FROM (
-           SELECT git_sha FROM flake_stats
-           WHERE test_id = ? AND git_sha IS NOT NULL
-           GROUP BY git_sha
-           HAVING SUM(CASE WHEN status='passed' THEN 1 ELSE 0 END) > 0
-              AND SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) > 0
-         )`,
-        f.test_id,
-      )[0]!.n as number;
-      return `<tr><td>${esc(f.test_id)}</td><td>${esc(f.total)}</td><td>${esc(f.passes)}</td><td>${esc(f.fails)}</td><td>${flaky > 0 ? `<span class="badge b-amber">@flaky (${flaky} SHA${flaky > 1 ? 's' : ''} flip)</span>` : '—'}</td></tr>`;
+      const flaky = f.flakyShaFlips;
+      return `<tr><td>${esc(f.testId)}</td><td>${esc(f.total)}</td><td>${esc(f.passes)}</td><td>${esc(f.fails)}</td><td>${flaky > 0 ? `<span class="badge b-amber">@flaky (${flaky} SHA${flaky > 1 ? 's' : ''} flip)</span>` : '—'}</td></tr>`;
     })
     .join('\n');
 
   // ---- LLM cost summary ------------------------------------------------------------
-  const llmRows = q(
-    `SELECT provider, model, purpose,
-            COUNT(*) calls,
-            SUM(CASE WHEN ok = 1 THEN 0 ELSE 1 END) failures,
-            SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
-            SUM(cost_usd) cost, AVG(latency_ms) avg_latency
-     FROM llm_calls GROUP BY provider, model, purpose ORDER BY cost DESC`,
-  )
+  const llm = queryLlmCosts(store);
+  const llmRows = llm.rows
     .map(
       (l) =>
-        `<tr><td>${esc(l.provider)}/${esc(l.model)}</td><td>${esc(l.purpose)}</td><td>${esc(l.calls)}${(l.failures as number) > 0 ? ` <span class="badge b-red">${l.failures} failed</span>` : ''}</td><td>${esc(l.input_tokens)} / ${esc(l.output_tokens)}</td><td>$${Number(l.cost).toFixed(4)}</td><td>${Math.round(l.avg_latency as number)}ms</td></tr>`,
+        `<tr><td>${esc(l.provider)}/${esc(l.model)}</td><td>${esc(l.purpose)}</td><td>${esc(l.calls)}${l.failures > 0 ? ` <span class="badge b-red">${l.failures} failed</span>` : ''}</td><td>${esc(l.inputTokens)} / ${esc(l.outputTokens)}</td><td>$${Number(l.costUsd).toFixed(4)}</td><td>${Math.round(l.avgLatencyMs)}ms</td></tr>`,
     )
     .join('\n');
-  const totalCost = q('SELECT COALESCE(SUM(cost_usd),0) c FROM llm_calls')[0]!.c as number;
+  const totalCost = llm.totalCostUsd;
 
   const html = `<!doctype html>
 <html lang="en">
@@ -262,7 +211,7 @@ export function generateReport(store: SentinelStore, opts: ReportOptions): Repor
 <body>
   <header>
     <h1>Sentinel Report</h1>
-    <div class="sub">generated ${new Date().toISOString()} — ${runs.length} run(s)</div>
+    <div class="sub">generated ${new Date().toISOString()} — ${overviews.length} run(s)</div>
   </header>
   <main>
     <h2>Runs</h2>
@@ -291,5 +240,5 @@ export function generateReport(store: SentinelStore, opts: ReportOptions): Repor
 
   const indexPath = path.join(outDir, 'index.html');
   writeFileSync(indexPath, html);
-  return { indexPath, runsIncluded: runs.length };
+  return { indexPath, runsIncluded: overviews.length };
 }
