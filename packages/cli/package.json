@@ -4,11 +4,12 @@
   "description": "Sentinel CLI: run suites with healing, manage the state DB, scaffold projects.",
   "type": "module",
   "bin": {
-    "sentinel": "./dist/index.js"
+    "sentinel": "./bin/sentinel.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
+    "bin",
     "dist"
   ],
   "scripts": {

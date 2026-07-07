@@ -75,10 +75,10 @@ jobs:
         continue-on-error: true
         run: |
           if [ -f .sentinel-ci/cache.json ]; then
-            npx sentinel db import .sentinel-ci/cache.json
+            pnpm exec sentinel db import .sentinel-ci/cache.json
           fi
           set +e
-          out=$(npx sentinel escalations --choose ${{ steps.cmd.outputs.id }} ${{ steps.cmd.outputs.label }} 2>&1)
+          out=$(pnpm exec sentinel escalations --choose ${{ steps.cmd.outputs.id }} ${{ steps.cmd.outputs.label }} 2>&1)
           code=$?
           set -e
           echo "$out"
@@ -95,7 +95,7 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: |
           mkdir -p .sentinel-ci
-          npx sentinel db export --json .sentinel-ci/cache.json
+          pnpm exec sentinel db export --json .sentinel-ci/cache.json
       - uses: actions/cache/save@v4
         if: steps.cmd.outputs.valid == 'true' && steps.apply.outputs.code == '0'
         with:

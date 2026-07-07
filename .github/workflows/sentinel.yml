@@ -88,21 +88,21 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: |
           if [ -f .sentinel-ci/cache.json ]; then
-            npx sentinel db import .sentinel-ci/cache.json
+            pnpm exec sentinel db import .sentinel-ci/cache.json
           else
             echo "no locator cache yet — first run populates it"
           fi
 
       - name: Run suite (shard ${{ matrix.shard }}/${{ inputs.shard-total }})
         working-directory: ${{ inputs.working-directory }}
-        run: npx sentinel run -- --shard=${{ matrix.shard }}/${{ inputs.shard-total }}
+        run: pnpm exec sentinel run -- --shard=${{ matrix.shard }}/${{ inputs.shard-total }}
 
       - name: Export shard state
         if: always()
         working-directory: ${{ inputs.working-directory }}
         run: |
           mkdir -p .sentinel-shards
-          npx sentinel db export --json .sentinel-shards/shard-${{ matrix.shard }}.json
+          pnpm exec sentinel db export --json .sentinel-shards/shard-${{ matrix.shard }}.json
       - name: Upload shard state + heal screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,18 +148,18 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: |
           if [ -f .sentinel-ci/cache.json ]; then
-            npx sentinel db import .sentinel-ci/cache.json
+            pnpm exec sentinel db import .sentinel-ci/cache.json
           fi
           find .sentinel-merged -name 'shard-*.json' -print0 | while IFS= read -r -d '' f; do
             echo "importing $f"
-            npx sentinel db import "$f"
+            pnpm exec sentinel db import "$f"
           done
 
       - name: Report + summary
         working-directory: ${{ inputs.working-directory }}
         run: |
-          npx sentinel report --out sentinel-report
-          npx sentinel summary --run-prefix "gh-${{ github.run_id }}-" \
+          pnpm exec sentinel report --out sentinel-report
+          pnpm exec sentinel summary --run-prefix "gh-${{ github.run_id }}-" \
             --out sentinel-report/summary.md --json sentinel-report/summary.json
           cat sentinel-report/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload HTML report
@@ -247,7 +247,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: |
           mkdir -p .sentinel-ci
-          npx sentinel db export --json .sentinel-ci/cache.json
+          pnpm exec sentinel db export --json .sentinel-ci/cache.json
       - name: Save locator cache
         uses: actions/cache/save@v4
         with:
