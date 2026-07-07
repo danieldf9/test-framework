@@ -1,5 +1,10 @@
 # Sentinel
 
+[![CI](https://github.com/danieldf9/sentinel-test-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/danieldf9/sentinel-test-framework/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node ≥ 20](https://img.shields.io/badge/node-%E2%89%A5%2020-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![Built on Playwright](https://img.shields.io/badge/built%20on-Playwright-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
+
 Self-healing end-to-end test automation on top of Playwright. Tests pair a normal
 deterministic locator with a semantic **intent** string; when the locator breaks, Sentinel
 diagnoses _why_ before doing anything, heals pure locator drift through a tiered pipeline,
