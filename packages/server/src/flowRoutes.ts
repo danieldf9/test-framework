@@ -42,10 +42,10 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const toPosix = (p: string): string => p.split(path.sep).join('/');
+export const toPosix = (p: string): string => p.split(path.sep).join('/');
 
 /** Resolve an API-supplied relative path, refusing escapes from rootDir. */
-function resolveInRoot(rootDir: string, rel: string): string {
+export function resolveInRoot(rootDir: string, rel: string): string {
   const abs = path.resolve(rootDir, rel);
   if (
     path.relative(rootDir, abs).startsWith('..') ||
@@ -58,13 +58,13 @@ function resolveInRoot(rootDir: string, rel: string): string {
 
 /** The fixture's test identity for a spec file + test title (see fixture.ts:
  * makeTestId(relativeFile, titlePath) where titlePath = [file basename, title]). */
-function testIdFor(rootDir: string, absSpecPath: string, title: string): string {
+export function testIdFor(rootDir: string, absSpecPath: string, title: string): string {
   return makeTestId(path.relative(rootDir, absSpecPath), [path.basename(absSpecPath), title]);
 }
 
 /** Where new flows go: alongside existing flows, else alongside existing specs,
  * else a specs/ dir under the root. */
-function pickFlowDir(rootDir: string): string {
+export function pickFlowDir(rootDir: string): string {
   const files = walk(rootDir);
   const flow = files.find((f) => f.endsWith(FLOW_FILE_SUFFIX));
   if (flow) return path.dirname(flow);
@@ -73,10 +73,18 @@ function pickFlowDir(rootDir: string): string {
   return path.join(rootDir, 'specs');
 }
 
-function writeFlowFiles(absFlowPath: string, flow: Flow): void {
+export function writeFlowFiles(absFlowPath: string, flow: Flow): void {
   mkdirSync(path.dirname(absFlowPath), { recursive: true });
   writeFileSync(absFlowPath, JSON.stringify(flow, null, 2) + '\n');
   writeFileSync(specPathForFlow(absFlowPath), compileFlow(flow, path.basename(absFlowPath)));
+}
+
+/** Next non-colliding `<slug>[-n].flow.json` path inside a directory. */
+export function nextFlowPath(dir: string, title: string): string {
+  const base = slugForTitle(title);
+  let abs = path.join(dir, `${base}${FLOW_FILE_SUFFIX}`);
+  for (let n = 2; existsSync(abs); n++) abs = path.join(dir, `${base}-${n}${FLOW_FILE_SUFFIX}`);
+  return abs;
 }
 
 export function registerFlowRoutes(app: FastifyInstance, deps: FlowRouteDeps): void {
@@ -133,10 +141,7 @@ export function registerFlowRoutes(app: FastifyInstance, deps: FlowRouteDeps): v
       reply.code(400);
       return { error: (err as Error).message };
     }
-    const dir = pickFlowDir(rootDir);
-    let base = slugForTitle(title);
-    let abs = path.join(dir, `${base}${FLOW_FILE_SUFFIX}`);
-    for (let n = 2; existsSync(abs); n++) abs = path.join(dir, `${base}-${n}${FLOW_FILE_SUFFIX}`);
+    const abs = nextFlowPath(pickFlowDir(rootDir), title);
     writeFlowFiles(abs, flow);
     return { path: toPosix(path.relative(rootDir, abs)), title: flow.title };
   });
@@ -223,11 +228,7 @@ export function registerFlowRoutes(app: FastifyInstance, deps: FlowRouteDeps): v
       const created: Array<{ path: string; title: string }> = [];
       let movedRows = 0;
       for (const imported of result.flows) {
-        let base = slugForTitle(imported.title);
-        let flowAbs = path.join(dir, `${base}${FLOW_FILE_SUFFIX}`);
-        for (let n = 2; existsSync(flowAbs); n++) {
-          flowAbs = path.join(dir, `${base}-${n}${FLOW_FILE_SUFFIX}`);
-        }
+        const flowAbs = nextFlowPath(dir, imported.title);
         writeFlowFiles(flowAbs, imported.flow);
         const newSpecAbs = specPathForFlow(flowAbs);
         const oldTestId = testIdFor(rootDir, abs, imported.title);

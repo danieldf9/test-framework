@@ -17,6 +17,8 @@ import {
 import { previewPromotions, promoteAndOpenPr } from '@sentinel/ops';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerFlowRoutes } from './flowRoutes.js';
+import { RecorderController } from './recorder.js';
+import { registerRecorderRoutes } from './recorderRoutes.js';
 import { RunController } from './runController.js';
 
 export interface AppDeps {
@@ -199,6 +201,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       store: deps.store,
       rootDir: deps.loaded.rootDir,
       writeBlocked: () => runBusy(),
+    });
+    // ---- Smart Recorder (D39): one session, headed browser, cache seeding ----
+    const recorder = new RecorderController(deps.store, deps.loaded);
+    registerRecorderRoutes(app, { recorder, writeBlocked: () => runBusy() });
+    app.addHook('onClose', async () => {
+      await recorder.stop().catch(() => {});
     });
   }
 

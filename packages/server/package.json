@@ -22,6 +22,7 @@
     "@sentinel/core": "workspace:*",
     "@sentinel/flow": "workspace:*",
     "@sentinel/ops": "workspace:*",
+    "@sentinel/providers": "workspace:*",
     "@sentinel/report": "workspace:*",
     "@sentinel/web": "workspace:*",
     "@fastify/static": "^8.0.3",

@@ -204,6 +204,9 @@ importers:
       '@sentinel/ops':
         specifier: workspace:*
         version: link:../ops
+      '@sentinel/providers':
+        specifier: workspace:*
+        version: link:../providers
       '@sentinel/report':
         specifier: workspace:*
         version: link:../report
