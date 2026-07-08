@@ -393,3 +393,34 @@ Known limitation (also printed by the CLI): the `page.goto`/`page.click(sel)` sh
 are recognized only under the standard `page` fixture name — an aliased fixture
 (`{ page: p }`) is left for manual migration. Locator chains and locators held in
 variables are handled regardless of their names.
+
+## D38 — stepKey: explicit stable step identity for flow-authored tests
+
+`makeStepId(action, intent, occurrence)` deliberately makes the intent part of a step's
+identity: in a hand-authored spec, rewriting the intent means the author is pointing at
+something new, so orphaning the cached locator is correct (D-earlier, ids.ts). The no-code
+flow editor (Studio Phase 2) breaks that assumption: a PM refining the wording of an intent
+("Checkout button" → "Checkout button in header") means _same step, better description_ —
+and must NOT reset the step's healing history. Reordering two steps that share an
+(action, intent) pair has the same failure through the occurrence counter.
+
+The fix is an explicit, opt-in identity: `s.*` calls accept an optional `stepKey`
+(1–64 chars, `[A-Za-z0-9_.:-]`, unique per test, validated loudly). When present it is
+used VERBATIM as the step's cache/heal key; intent edits and reordering no longer move
+the key. When absent, identity derives from (action, intent, occurrence) exactly as
+before — hand-authored specs are byte-for-byte unaffected, and the intent stays the
+semantic anchor. `resolveStepId` (ids.ts) centralizes both paths; the fixture holds the
+per-test occurrence map and used-key set.
+
+There is NO schema migration: `step_id` columns simply carry the stepKey when one was
+supplied (it is already an opaque string; action/intent live in their own columns).
+`store.rekeyStep(testId, old, new)` re-points locator_cache/heals/escalations/steps in
+one transaction (`UPDATE OR REPLACE` on the cache PK) — it exists for the Phase 2
+importer: when a hand-authored spec is lifted into a flow and its steps are assigned
+fresh stepKeys, the importer recomputes each step's old derived id from the
+(action, intent, occurrence) it is already parsing and migrates the history instead of
+cold-starting it. stepKeys are minted and owned by the flow JSON (the flow compiler
+emits them as literals into the generated spec); humans never have to invent them.
+Known deferred sibling: `makeTestId(file, titlePath)` has the same fragility one level
+up (file moves / title edits orphan a whole test's state) — a stable `testKey` is
+deliberately NOT part of this change and will be designed with the flow format.
