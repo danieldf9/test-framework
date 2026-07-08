@@ -3,10 +3,17 @@ import type {
   ActiveRun,
   AnswerResult,
   FlakeStat,
+  Flow,
+  FlowListItem,
+  FlowOne,
+  ImportableSpec,
+  ImportResultBody,
   LlmCosts,
   PendingEscalation,
   PromotePreview,
   PromoteResult,
+  RecorderSaveResult,
+  RecorderStatus,
   RunDetailResponse,
   RunOverview,
   SummaryData,
@@ -16,6 +23,17 @@ async function getJson<T>(pathname: string): Promise<T> {
   const res = await fetch(pathname, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error(`${pathname} → HTTP ${res.status}`);
   return (await res.json()) as T;
+}
+
+async function sendJson<T>(pathname: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {
+  const res = await fetch(pathname, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json()) as T & { error?: string };
+  if (!res.ok) throw new Error(data?.error ?? `${pathname} → HTTP ${res.status}`);
+  return data;
 }
 
 /** Polling cadence for the live-ish dashboard (a run writes to the DB we read). */
@@ -126,6 +144,104 @@ export function useApplyPromotion() {
       qc.invalidateQueries({ queryKey: ['promote-preview'] });
       qc.invalidateQueries({ queryKey: ['runs'] });
       qc.invalidateQueries({ queryKey: ['summary'] });
+    },
+  });
+}
+
+// ---- Flows (block editor) ----------------------------------------------------
+
+export function useFlows() {
+  return useQuery({
+    queryKey: ['flows'],
+    queryFn: () => getJson<FlowListItem[]>('/api/flows'),
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useFlow(path: string | null) {
+  return useQuery({
+    queryKey: ['flow', path],
+    enabled: path != null,
+    queryFn: () => getJson<FlowOne>(`/api/flows/one?path=${encodeURIComponent(path!)}`),
+  });
+}
+
+export function useCreateFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { title: string }) =>
+      sendJson<{ path: string; title: string }>('/api/flows', 'POST', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['flows'] }),
+  });
+}
+
+export function useSaveFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { path: string; flow: Flow }) =>
+      sendJson<{ path: string; title: string; rekeyedRows: number }>('/api/flows', 'PUT', body),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+      qc.invalidateQueries({ queryKey: ['flow', vars.path] });
+    },
+  });
+}
+
+export function useImportables() {
+  return useQuery({
+    queryKey: ['importables'],
+    queryFn: () => getJson<ImportableSpec[]>('/api/flows/importable'),
+  });
+}
+
+export function useImportSpec() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { specPath: string }) =>
+      sendJson<ImportResultBody>('/api/flows/import', 'POST', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+      qc.invalidateQueries({ queryKey: ['importables'] });
+    },
+  });
+}
+
+// ---- Recorder ------------------------------------------------------------------
+
+export function useRecorderStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ['recorder'],
+    enabled,
+    queryFn: () => getJson<RecorderStatus>('/api/recorder/status'),
+    refetchInterval: 1000,
+  });
+}
+
+export function useStartRecording() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { url: string }) =>
+      sendJson<RecorderStatus>('/api/recorder/start', 'POST', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['recorder'] }),
+  });
+}
+
+export function useStopRecording() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => sendJson<RecorderStatus>('/api/recorder/stop', 'POST', {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['recorder'] }),
+  });
+}
+
+export function useSaveRecording() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { title: string }) =>
+      sendJson<RecorderSaveResult>('/api/recorder/save', 'POST', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['recorder'] });
+      qc.invalidateQueries({ queryKey: ['flows'] });
     },
   });
 }

@@ -212,10 +212,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   // SPA: serve the built web assets and fall back to index.html for client routes.
   if (deps.webDir) {
+    // wildcard (default) resolves files per-request: a `vite build` while the
+    // server runs produces new hashed asset names, and `wildcard: false` would
+    // snapshot routes at startup and 404 them into the SPA fallback (as HTML).
     await app.register(fastifyStatic, {
       root: deps.webDir,
       prefix: '/',
-      wildcard: false,
     });
     app.setNotFoundHandler((req, reply) => {
       if (

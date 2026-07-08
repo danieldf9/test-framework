@@ -189,6 +189,98 @@ export interface LlmCosts {
   totalCostUsd: number;
 }
 
+// ---- Flows (block editor) — mirror @sentinel/flow's schema ------------------
+
+export type LocatorKind = 'testid' | 'role' | 'label' | 'placeholder' | 'text' | 'css';
+
+export interface LocatorSpec {
+  kind: LocatorKind;
+  value: string;
+  name?: string;
+  exact?: boolean;
+}
+
+export interface FlowStepBase {
+  group?: string;
+}
+
+export type FlowStep =
+  | (FlowStepBase & { action: 'goto'; url: string })
+  | (FlowStepBase & { action: 'click'; stepKey: string; intent: string; locator: LocatorSpec })
+  | (FlowStepBase & {
+      action: 'fill';
+      stepKey: string;
+      intent: string;
+      locator: LocatorSpec;
+      value: string;
+      masked?: boolean;
+    })
+  | (FlowStepBase & {
+      action: 'expectVisible';
+      stepKey: string;
+      intent: string;
+      locator: LocatorSpec;
+    })
+  | (FlowStepBase & {
+      action: 'expectText';
+      stepKey: string;
+      intent: string;
+      locator: LocatorSpec;
+      text: string;
+    });
+
+export interface Flow {
+  version: 1;
+  title: string;
+  steps: FlowStep[];
+}
+
+export interface FlowListItem {
+  path: string;
+  title: string;
+  steps: number;
+  invalid: boolean;
+}
+
+export interface FlowOne {
+  path: string;
+  flow: Flow;
+  specPath: string;
+}
+
+export type ImportableSpec =
+  | { path: string; importable: true; tests: number }
+  | { path: string; importable: false; reason: string };
+
+export interface ImportResultBody {
+  flows: Array<{ path: string; title: string }>;
+  movedRows: number;
+  retired: string;
+}
+
+// ---- Recorder ----------------------------------------------------------------
+
+export interface RecorderStep {
+  action: 'goto' | 'click' | 'fill';
+  intent: string;
+  locator?: LocatorSpec;
+  value?: string;
+  masked?: boolean;
+}
+
+export interface RecorderStatus {
+  active: boolean;
+  url: string | null;
+  steps: RecorderStep[];
+}
+
+export interface RecorderSaveResult {
+  path: string;
+  title: string;
+  seededSteps: number;
+  intentSource: 'llm' | 'heuristic';
+}
+
 export type PromotionStatus = 'ready' | 'conflict' | 'not-found' | 'missing-file';
 
 export interface PromotionPlan {

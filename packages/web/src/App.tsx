@@ -2,14 +2,20 @@ import { useState, type JSX } from 'react';
 import { useEscalations, useSummary } from './api';
 import { Escalations } from './views/Escalations';
 import { Flake } from './views/Flake';
+import { FlowEditor } from './views/FlowEditor';
+import { Flows } from './views/Flows';
 import { LlmCosts } from './views/LlmCosts';
 import { Promote } from './views/Promote';
+import { Recorder } from './views/Recorder';
 import { RunDetail } from './views/RunDetail';
 import { RunsList } from './views/RunsList';
 
 type View =
   | { name: 'runs' }
   | { name: 'run'; id: string }
+  | { name: 'flows' }
+  | { name: 'flow'; path: string }
+  | { name: 'recorder' }
   | { name: 'escalations' }
   | { name: 'promote' }
   | { name: 'flake' }
@@ -20,7 +26,10 @@ export function App(): JSX.Element {
   const summary = useSummary();
   const escalations = useEscalations();
   const pending = escalations.data?.length ?? 0;
-  const section = view.name === 'run' ? 'runs' : view.name;
+  const section = view.name === 'run' ? 'runs' : view.name === 'flow' ? 'flows' : view.name;
+
+  const openRun = (id: string): void => setView({ name: 'run', id });
+  const openFlow = (path: string): void => setView({ name: 'flow', path });
 
   return (
     <div className="shell">
@@ -35,6 +44,18 @@ export function App(): JSX.Element {
             onClick={() => setView({ name: 'runs' })}
           >
             Runs
+          </button>
+          <button
+            className={section === 'flows' ? 'active' : ''}
+            onClick={() => setView({ name: 'flows' })}
+          >
+            Flows
+          </button>
+          <button
+            className={section === 'recorder' ? 'active' : ''}
+            onClick={() => setView({ name: 'recorder' })}
+          >
+            Recorder
           </button>
           <button
             className={section === 'escalations' ? 'active' : ''}
@@ -70,10 +91,19 @@ export function App(): JSX.Element {
       </aside>
 
       <main className="content">
-        {view.name === 'runs' && <RunsList onOpenRun={(id) => setView({ name: 'run', id })} />}
+        {view.name === 'runs' && <RunsList onOpenRun={openRun} />}
         {view.name === 'run' && (
           <RunDetail runId={view.id} onBack={() => setView({ name: 'runs' })} />
         )}
+        {view.name === 'flows' && <Flows onOpenFlow={openFlow} />}
+        {view.name === 'flow' && (
+          <FlowEditor
+            path={view.path}
+            onBack={() => setView({ name: 'flows' })}
+            onOpenRun={openRun}
+          />
+        )}
+        {view.name === 'recorder' && <Recorder onOpenFlow={openFlow} />}
         {view.name === 'escalations' && <Escalations />}
         {view.name === 'promote' && <Promote />}
         {view.name === 'flake' && <Flake />}
