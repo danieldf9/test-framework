@@ -86,7 +86,11 @@ export function makeTier3Resolver(deps: Tier3Deps): TierResolver {
         throw new SpendCapExceededError(spent, deps.llm.maxSpendUsdPerRun);
       }
 
-      const { json, includedCount } = serializeCandidates(ctx.collected, deps.llm.domCharBudget);
+      const { json, includedCount, indexMap } = serializeCandidates(
+        ctx.collected,
+        deps.llm.domCharBudget,
+        ctx.cache.fingerprint,
+      );
       if (includedCount === 0) return null;
 
       const response = await completeJsonWithRepair<HealLlmResponse>({
@@ -106,7 +110,7 @@ export function makeTier3Resolver(deps: Tier3Deps): TierResolver {
       });
       if (!response || response.elementIndex === -1) return null;
 
-      const chosen = ctx.collected[response.elementIndex]!;
+      const chosen = ctx.collected[indexMap[response.elementIndex]!]!;
       let confidence = Math.min(response.confidence, 0.98);
       let reasoning = `LLM vision (${deps.provider.name}/${deps.provider.model}): ${response.reasoning.slice(0, 400)}`;
 

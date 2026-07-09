@@ -76,6 +76,19 @@ function EscalationCard({
       <div className="esc-body">
         <div className="esc-intent">{q.intent}</div>
         <div className="esc-q">{q.question}</div>
+        {q.question.includes('[capped:') && (
+          <div className="esc-note">
+            ⓘ The AI picked an element <em>confidently</em>, but that element looks very different
+            from what this step used before — so Sentinel held the change back for a human to decide
+            instead of trusting it.
+          </div>
+        )}
+        {q.question.includes('vision') && q.question.includes('disagrees') && (
+          <div className="esc-note">
+            ⓘ The AI&apos;s visual check (screenshot) and its DOM check pointed at{' '}
+            <em>different</em> elements, so confidence was lowered and a human decides.
+          </div>
+        )}
         {q.context?.oldLocator && (
           <div className="loc">
             broke: <code>{q.context.oldLocator}</code>

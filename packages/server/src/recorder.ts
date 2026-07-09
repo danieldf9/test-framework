@@ -1,7 +1,9 @@
 import path from 'node:path';
 import type { Browser, Page } from '@playwright/test';
 import {
+  completeJsonWithRepair,
   descriptorsFromFingerprint,
+  extractJsonObject,
   sentinelDomAgent,
   type ElementFingerprint,
   type LoadedConfig,
@@ -180,24 +182,71 @@ export function buildCaptureScript(testIdAttribute: string): string {
   // Enter commits the value AND fires change afterwards; the keydown handler
   // already emitted the fill, so that trailing change must not double-record.
   let suppressChangeFor = null;
-  // Assert mode: pushed by the server on toggle, pulled once per navigation.
+  // Assert mode: a full-viewport overlay swallows pointer events, so the app's
+  // own listeners (capture-phase handlers, drag libraries, focus logic) never
+  // see a half-delivered event sequence. The asserted element is found by
+  // hit-testing beneath the overlay — the page is observed, never touched.
   let mode = 'record';
-  window.__sentinelRecorderSetMode = (m) => { mode = m; };
-  if (window.__sentinelRecorderMode) {
-    window.__sentinelRecorderMode().then((m) => { mode = m; }).catch(() => {});
-  }
-  document.addEventListener('pointerdown', (e) => {
-    const raw = e.target instanceof Element ? e.target : null;
-    if (!raw) return;
-    if (mode === 'assert') {
-      // The click must observe, not act: block it and record an expectation on
-      // the exact element under the pointer (assert targets are often plain text).
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const fp = fpOf(raw);
-      if (fp) window.__sentinelRecorderEmit({ type: 'assert', fingerprint: fp });
+  let overlay = null;
+  let hoverBox = null;
+  const removeOverlay = () => {
+    if (overlay) { overlay.remove(); overlay = null; }
+    if (hoverBox) { hoverBox.remove(); hoverBox = null; }
+  };
+  const targetAt = (x, y) => {
+    overlay.style.pointerEvents = 'none';
+    const el = document.elementFromPoint(x, y);
+    overlay.style.pointerEvents = 'auto';
+    return el instanceof Element ? el : null;
+  };
+  const installOverlay = () => {
+    if (overlay) return;
+    if (!document.body) {
+      document.addEventListener('DOMContentLoaded', () => {
+        if (mode === 'assert') installOverlay();
+      }, { once: true });
       return;
     }
+    overlay = document.createElement('div');
+    overlay.id = '__sentinel-assert-overlay';
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(37,99,235,0.04);';
+    hoverBox = document.createElement('div');
+    hoverBox.style.cssText =
+      'position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #2563eb;border-radius:3px;display:none;';
+    overlay.addEventListener('pointermove', (e) => {
+      const el = targetAt(e.clientX, e.clientY);
+      if (!el || el === document.documentElement || el === document.body) {
+        hoverBox.style.display = 'none';
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      hoverBox.style.display = 'block';
+      hoverBox.style.left = (r.left - 2) + 'px';
+      hoverBox.style.top = (r.top - 2) + 'px';
+      hoverBox.style.width = r.width + 'px';
+      hoverBox.style.height = r.height + 'px';
+    });
+    overlay.addEventListener('click', (e) => {
+      const el = targetAt(e.clientX, e.clientY);
+      const fp = el ? fpOf(el) : null;
+      if (fp) window.__sentinelRecorderEmit({ type: 'assert', fingerprint: fp });
+    });
+    document.body.appendChild(overlay);
+    document.body.appendChild(hoverBox);
+  };
+  const applyMode = (m) => {
+    mode = m;
+    if (m === 'assert') installOverlay(); else removeOverlay();
+  };
+  window.__sentinelRecorderSetMode = applyMode;
+  if (window.__sentinelRecorderMode) {
+    window.__sentinelRecorderMode().then(applyMode).catch(() => {});
+  }
+  document.addEventListener('pointerdown', (e) => {
+    if (mode === 'assert') return; // the overlay owns all pointer input
+    const raw = e.target instanceof Element ? e.target : null;
+    if (!raw) return;
     const el = raw.closest(INTERACTIVE) || raw;
     const tag = el.tagName.toLowerCase();
     if (tag === 'select') return; // recorded from its change event
@@ -208,13 +257,6 @@ export function buildCaptureScript(testIdAttribute: string): string {
     }
     const fp = fpOf(el);
     if (fp) window.__sentinelRecorderEmit({ type: 'click', fingerprint: fp });
-  }, { capture: true });
-  // pointerdown's preventDefault does not stop the subsequent click from
-  // activating links/buttons — both must be intercepted while asserting.
-  document.addEventListener('click', (e) => {
-    if (mode !== 'assert') return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
   }, { capture: true });
   document.addEventListener('change', (e) => {
     if (mode === 'assert') return;
@@ -270,6 +312,9 @@ export interface SaveResult {
   title: string;
   seededSteps: number;
   intentSource: 'llm' | 'heuristic';
+  /** Present when LLM refinement was skipped or failed — shown to the user so
+   * robotic-looking heuristic intents are never a silent mystery. */
+  refineNote?: string;
 }
 
 /**
@@ -406,17 +451,27 @@ export class RecorderController {
     await this.stop();
 
     let intentSource: SaveResult['intentSource'] = 'heuristic';
-    try {
-      const refined = await this.refineIntentsWithLlm(this.steps);
-      if (refined) {
-        for (const [i, intent] of refined.entries()) {
-          const step = this.steps[i];
-          if (step && intent) step.intent = intent.slice(0, 500);
+    let refineNote: string | undefined;
+    if (this.loaded.config.llm.provider === 'none') {
+      refineNote = 'no LLM provider is configured — the draft intents were kept as-is';
+    } else {
+      try {
+        const refined = await this.refineIntentsWithLlm(this.steps);
+        if (refined) {
+          for (const [i, intent] of refined.entries()) {
+            const step = this.steps[i];
+            if (step && intent) step.intent = intent.slice(0, 500);
+          }
+          intentSource = 'llm';
+        } else {
+          refineNote =
+            'the LLM did not return usable intents (after repair attempts) — the draft intents were kept';
         }
-        intentSource = 'llm';
+      } catch (err) {
+        // Heuristic intents are already in place — refinement stays best-effort,
+        // but the user is told why the intents look robotic.
+        refineNote = `LLM intent refinement failed (${String((err as Error).message).slice(0, 140)}) — the draft intents were kept`;
       }
-    } catch {
-      // Heuristic intents are already in place — LLM refinement is best-effort.
     }
 
     const keyed: Array<{ step: FlowStep; draft: DraftStep }> = [];
@@ -484,11 +539,19 @@ export class RecorderController {
     this.steps = [];
     this.startUrl = null;
     this.changed();
-    return { path: toPosix(path.relative(rootDir, abs)), title, seededSteps: seeded, intentSource };
+    return {
+      path: toPosix(path.relative(rootDir, abs)),
+      title,
+      seededSteps: seeded,
+      intentSource,
+      ...(refineNote ? { refineNote } : {}),
+    };
   }
 
-  /** One batched call: fingerprints in, intent strings out. Returns null when no
-   * LLM is configured; throws on any provider problem (caller falls back). */
+  /** One batched structured-output call: fingerprints in, intent strings out —
+   * through the same extract/repair loop the healing tiers use (D19/D43), never
+   * ad-hoc bracket scanning. Returns null when repairs are exhausted or the
+   * provider fails; throws only on setup problems (caller reports both). */
   private async refineIntentsWithLlm(steps: DraftStep[]): Promise<string[] | null> {
     const llm = this.loaded.config.llm;
     if (llm.provider === 'none') return null;
@@ -513,7 +576,7 @@ export class RecorderController {
         },
       },
     );
-    if (!setup.provider) return null;
+    if (!setup.provider) throw new Error(`LLM provider '${llm.provider}' could not be created`);
     const summaries = steps.map((d, i) => ({
       index: i,
       action: d.action,
@@ -525,24 +588,33 @@ export class RecorderController {
       placeholder: d.fingerprint?.attributes?.placeholder,
       nearbyText: d.fingerprint?.nearbyText?.slice(0, 120),
     }));
-    const res = await setup.provider.complete({
+    return completeJsonWithRepair<string[]>({
+      provider: setup.provider,
       messages: [
         {
           role: 'system',
-          content:
-            'You write short semantic intent descriptions for UI test steps. For each element, describe WHAT it is and WHERE it sits (e.g. "Add to cart button on the first product card"). Reply with ONLY a JSON array of strings, one per input element, same order. No markdown.',
+          content: `You write short semantic intent descriptions for UI test steps. For each element, describe WHAT it is and WHERE it sits (e.g. "Add to cart button on the first product card"). Reply with ONLY this JSON object, no markdown fences, no extra text:\n{"intents": ["<description>", ...]} — exactly one string per input element, same order.`,
         },
         { role: 'user', content: JSON.stringify(summaries) },
       ],
-      maxTokens: 2048,
       purpose: 'recorder-intents',
+      maxRepairAttempts: llm.maxRepairAttempts,
+      maxOutputTokens: Math.max(llm.maxOutputTokens, 2048),
+      repairSchemaHint: `{"intents": [<exactly ${steps.length} strings, one per element, same order>]}`,
+      validate: (text) => parseIntentsReply(text, steps.length),
     });
-    const text = res.text ?? '';
-    const start = text.indexOf('[');
-    const end = text.lastIndexOf(']');
-    if (start === -1 || end <= start) throw new Error('no JSON array in reply');
-    const arr = JSON.parse(text.slice(start, end + 1)) as unknown;
-    if (!Array.isArray(arr)) throw new Error('reply is not an array');
-    return arr.map((x) => (typeof x === 'string' ? x : ''));
   }
+}
+
+/** Extract + validate the recorder-intents reply (exported for unit tests). */
+export function parseIntentsReply(text: string, expectedCount: number): string[] {
+  const parsed = extractJsonObject(text) as { intents?: unknown };
+  const intents = parsed?.intents;
+  if (!Array.isArray(intents) || !intents.every((x) => typeof x === 'string')) {
+    throw new Error('expected {"intents": [<string>, ...]}');
+  }
+  if (intents.length !== expectedCount) {
+    throw new Error(`expected exactly ${expectedCount} intents, got ${intents.length}`);
+  }
+  return intents as string[];
 }

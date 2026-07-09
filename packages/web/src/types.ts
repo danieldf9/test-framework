@@ -309,6 +309,8 @@ export interface RecorderSaveResult {
   title: string;
   seededSteps: number;
   intentSource: 'llm' | 'heuristic';
+  /** Why LLM refinement was skipped/failed (heuristic intents kept), if it was. */
+  refineNote?: string;
 }
 
 export type PromotionStatus = 'ready' | 'conflict' | 'not-found' | 'missing-file';

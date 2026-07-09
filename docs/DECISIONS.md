@@ -518,3 +518,44 @@ Polling is NOT removed — it is relaxed (15s baseline, 5s for the hot views) an
 as the fallback for a dropped stream and for the one case push cannot cover: a CLI
 `sentinel run` writing to the DB from outside the server process. The events endpoint
 is registered even in read-only mode; a read-only server simply has fewer emitters.
+
+## D43 — Review hardening: assert overlay, structured outputs, budget inclusion, guard transparency
+
+Four fixes from an external review of the Studio work, each addressing a "works in the
+demo, bites in the wild" gap:
+
+**Assert mode observes through an overlay, never by intercepting events** (supersedes
+the D41 interception detail). `preventDefault` + `stopImmediatePropagation` on
+pointerdown/click kept the page from _acting_, but a real SPA still saw a
+half-delivered event stream — capture-phase handlers, drag libraries, and focus logic
+can wedge on that, and a non-technical user just sees the page "break". Now toggling
+assert mode installs a full-viewport overlay (max z-index, crosshair cursor, hover
+highlight); the app receives no pointer events at all, and the asserted element is
+found by flipping the overlay's `pointer-events` off for one
+`document.elementFromPoint` hit-test. Removing the overlay restores the page bit-for-bit.
+
+**Recorder intent refinement uses the shared structured-output loop.** The MVP scanned
+for `indexOf('[')`/`lastIndexOf(']')` — one conversational bracket in the reply breaks
+it. Refinement now asks for `{"intents": [...]}` and goes through the same
+`extractJsonObject` + `completeJsonWithRepair` machinery as Tiers 2–3 (fence/thought
+stripping, repair prompts, jsonMode). And failures are no longer silent: `save()`
+returns a `refineNote` and the UI says why intents look robotic instead of pretending
+nothing happened.
+
+**Candidate inclusion under the char budget is similarity-ranked.** `serializeCandidates`
+cut a linear prefix, so on a large page the drifted target could be dropped just for
+sitting late in the DOM — forcing the model into a confident (and correct!) `-1` and an
+unnecessary failure. Inclusion is now decided by fingerprint similarity to the
+last-known element (the one thing Tier 2 always has); presentation keeps the
+interactive-first collection order, and the model's index maps back through an explicit
+`indexMap`. Output is byte-identical to the old behavior whenever everything fits.
+
+**Guard notes travel to the escalation UI.** The `[capped: …]` / vision-disagreement
+markers appended to tier reasoning used to die inside the pipeline: the below-floor
+refusal only said "confidence 0.55 below apply floor". The refusal now carries the
+guard markers, they flow into the escalation question, and the Studio renders them as a
+plain-English explanation ("the AI was confident, but the element looks very different
+— a human decides"). Trust needs the _why_, not just the number. Also from the same
+review: flow-editor goto URLs are validated (`/`-relative or http(s) only), `s.step`
+groups get visual banding in the editor, and the recorder's expected-text edits are
+buffered and flushed before save so a type-then-immediately-save never loses input.

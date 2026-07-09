@@ -49,33 +49,55 @@ interface CompactCandidate {
   nearby: string;
 }
 
-/** Prune + serialize candidates under the char budget (interactive-first order
- * is preserved from collection). Fingerprints never contain input values. */
+/**
+ * Prune + serialize candidates under the char budget. When an `anchor`
+ * fingerprint is given, budget INCLUSION is decided by similarity to it (the
+ * likely target must never be dropped just because it sits late in the DOM),
+ * while presentation keeps the interactive-first collection order. The model's
+ * `elementIndex` is a position in the serialized list — map it back to the
+ * collected array through `indexMap`. Fingerprints never contain input values.
+ */
 export function serializeCandidates(
   collected: ElementFingerprint[],
   charBudget: number,
-): { json: string; includedCount: number } {
-  const compact: CompactCandidate[] = [];
-  let size = 2;
-  for (let i = 0; i < collected.length; i++) {
-    const fp = collected[i]!;
-    const c: CompactCandidate = {
-      i,
-      tag: fp.tag,
-      role: fp.role,
-      name: fp.name.slice(0, 80),
-      text: fp.text.slice(0, 60),
-      testId: fp.testId,
-      id: fp.id,
-      classes: fp.classes.join(' ').slice(0, 60),
-      nearby: fp.nearbyText.slice(0, 100),
-    };
-    const chunk = JSON.stringify(c).length + 1;
-    if (size + chunk > charBudget) break;
-    size += chunk;
-    compact.push(c);
+  anchor?: ElementFingerprint,
+): { json: string; includedCount: number; indexMap: number[] } {
+  // Priority = who survives the budget; similarity-ranked when we know what
+  // the element used to look like, collection order otherwise.
+  const priority = collected.map((_, i) => i);
+  if (anchor) {
+    const scores = collected.map((fp) => fingerprintSimilarity(anchor, fp).score);
+    priority.sort((a, b) => scores[b]! - scores[a]! || a - b);
   }
-  return { json: JSON.stringify(compact), includedCount: compact.length };
+
+  const chunkOf = (fp: ElementFingerprint, i: number): CompactCandidate => ({
+    i,
+    tag: fp.tag,
+    role: fp.role,
+    name: fp.name.slice(0, 80),
+    text: fp.text.slice(0, 60),
+    testId: fp.testId,
+    id: fp.id,
+    classes: fp.classes.join(' ').slice(0, 60),
+    nearby: fp.nearbyText.slice(0, 100),
+  });
+
+  const included = new Set<number>();
+  let size = 2;
+  for (const idx of priority) {
+    // Size estimate uses the final sequential index width — close enough.
+    const chunk = JSON.stringify(chunkOf(collected[idx]!, included.size)).length + 1;
+    if (size + chunk > charBudget) {
+      if (anchor) continue; // a smaller later candidate may still fit
+      break; // no anchor → keep the legacy prefix semantics
+    }
+    size += chunk;
+    included.add(idx);
+  }
+
+  const indexMap = [...included].sort((a, b) => a - b);
+  const compact = indexMap.map((orig, pos) => chunkOf(collected[orig]!, pos));
+  return { json: JSON.stringify(compact), includedCount: compact.length, indexMap };
 }
 
 export interface Tier2PromptInput {
@@ -169,7 +191,11 @@ export function makeTier2Resolver(deps: Tier2Deps): TierResolver {
         throw new SpendCapExceededError(spent, deps.llm.maxSpendUsdPerRun);
       }
 
-      const { json, includedCount } = serializeCandidates(ctx.collected, deps.llm.domCharBudget);
+      const { json, includedCount, indexMap } = serializeCandidates(
+        ctx.collected,
+        deps.llm.domCharBudget,
+        ctx.cache.fingerprint,
+      );
       if (includedCount === 0) return null;
 
       const messages = buildTier2Messages({
@@ -197,7 +223,7 @@ export function makeTier2Resolver(deps: Tier2Deps): TierResolver {
       if (!response) return null;
       if (response.elementIndex === -1) return null;
 
-      const chosen = ctx.collected[response.elementIndex]!;
+      const chosen = ctx.collected[indexMap[response.elementIndex]!]!;
       let confidence = Math.min(response.confidence, 0.98);
       let reasoning = `LLM (${deps.provider.name}/${deps.provider.model}): ${response.reasoning.slice(0, 500)}`;
 

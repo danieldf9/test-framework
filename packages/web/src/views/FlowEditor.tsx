@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { Fragment, useEffect, useState, type JSX } from 'react';
 import { useFlow, useSaveFlow, useStartRun } from '../api';
 import type { Flow, FlowStep, LocatorKind, LocatorSpec } from '../types';
 
@@ -37,7 +37,13 @@ function newStep(action: FlowStep['action']): FlowStep {
 }
 
 function stepProblem(step: FlowStep): string | null {
-  if (step.action === 'goto') return step.url.trim() ? null : 'URL is required';
+  if (step.action === 'goto') {
+    const url = step.url.trim();
+    if (!url) return 'URL is required';
+    // Catch "google" before runtime does: app paths or absolute http(s) only.
+    if (!/^(\/|https?:\/\/)/.test(url)) return 'URL must start with / or http(s)://';
+    return null;
+  }
   if (!step.intent.trim()) return 'intent is required';
   if (!step.locator.value.trim()) return 'locator value is required';
   if (step.action === 'press' && !step.key.trim()) return 'key is required';
@@ -136,16 +142,22 @@ export function FlowEditor({
       {startRun.isError && <div className="esc-error">{(startRun.error as Error).message}</div>}
 
       {flow.steps.map((step, i) => (
-        <StepCard
-          key={step.action === 'goto' ? `goto-${i}` : step.stepKey}
-          step={step}
-          index={i}
-          problem={problems[i] ?? null}
-          onMoveUp={() => move(i, -1)}
-          onMoveDown={() => move(i, 1)}
-          onDelete={() => update((d) => void d.steps.splice(i, 1))}
-          onChange={(next) => update((d) => (d.steps[i] = next))}
-        />
+        <Fragment key={step.action === 'goto' ? `goto-${i}` : step.stepKey}>
+          {step.group && step.group !== flow.steps[i - 1]?.group && (
+            <div className="group-band" title="Consecutive steps sharing a group run as one block">
+              ⛓ {step.group}
+            </div>
+          )}
+          <StepCard
+            step={step}
+            index={i}
+            problem={problems[i] ?? null}
+            onMoveUp={() => move(i, -1)}
+            onMoveDown={() => move(i, 1)}
+            onDelete={() => update((d) => void d.steps.splice(i, 1))}
+            onChange={(next) => update((d) => (d.steps[i] = next))}
+          />
+        </Fragment>
       ))}
       {flow.steps.length === 0 && (
         <div className="card">
@@ -188,7 +200,9 @@ function StepCard({
   const set = (patch: Partial<FlowStep>): void => onChange({ ...step, ...patch } as FlowStep);
 
   return (
-    <div className={`card step-card${problem ? ' step-invalid' : ''}`}>
+    <div
+      className={`card step-card${problem ? ' step-invalid' : ''}${step.group ? ' step-grouped' : ''}`}
+    >
       <div className="step-head">
         <span className="step-n">{index + 1}</span>
         <span className="badge b-blue">{ACTION_LABEL[step.action]}</span>

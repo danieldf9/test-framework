@@ -8,10 +8,16 @@ import {
   useStopRecording,
   useUpdateRecorderStep,
 } from '../api';
+import type { RecorderSaveResult } from '../types';
 
 export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void }): JSX.Element {
   const [url, setUrl] = useState('http://127.0.0.1:4173/products');
   const [title, setTitle] = useState('');
+  // Expected-text edits are buffered locally (keyed by row index) and PATCHed on
+  // blur — and flushed again before save, so "type then click Save immediately"
+  // can never lose the text to an in-flight request.
+  const [textEdits, setTextEdits] = useState<Record<number, string>>({});
+  const [saved, setSaved] = useState<RecorderSaveResult | null>(null);
   // Poll whenever this view is mounted: a session may already be running (the
   // user navigated away and back), and TanStack stops the interval on unmount.
   const status = useRecorderStatus(true);
@@ -26,6 +32,25 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
   const mode = status.data?.mode ?? 'record';
   const steps = status.data?.steps ?? [];
   const canSave = !active && steps.length > 0;
+
+  const commitText = async (index: number): Promise<void> => {
+    const pending = textEdits[index];
+    if (pending === undefined || pending === (steps[index]?.text ?? '')) return;
+    await updateStep.mutateAsync({ index, text: pending });
+    setTextEdits((m) => {
+      const { [index]: _done, ...rest } = m;
+      return rest;
+    });
+  };
+
+  const saveFlow = async (): Promise<void> => {
+    // Flush any expected-text still sitting in local state before saving.
+    for (const key of Object.keys(textEdits)) await commitText(Number(key));
+    const result = await saveRec.mutateAsync({ title: title.trim() });
+    setSaved(result);
+    setTitle('');
+    setTextEdits({});
+  };
 
   return (
     <div>
@@ -51,7 +76,10 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
             <button
               className="btn-primary"
               disabled={!/^https?:\/\//.test(url) || start.isPending}
-              onClick={() => start.mutate({ url })}
+              onClick={() => {
+                setSaved(null);
+                start.mutate({ url });
+              }}
             >
               {start.isPending ? 'Opening browser…' : '⏺ Start recording'}
             </button>
@@ -129,20 +157,21 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
                       {s.key !== undefined && ` ⏎ ${s.key}`}
                       {s.action === 'expectText' && (
                         <input
-                          // Uncontrolled + commit-on-blur: the 1s status poll must
-                          // not clobber typing, and one PATCH per keystroke is noise.
-                          defaultValue={s.text ?? ''}
+                          value={textEdits[i] ?? s.text ?? ''}
                           placeholder="expected text"
-                          onBlur={(e) => {
-                            if (e.target.value !== (s.text ?? '')) {
-                              updateStep.mutate({ index: i, text: e.target.value });
-                            }
-                          }}
+                          onChange={(e) => setTextEdits((m) => ({ ...m, [i]: e.target.value }))}
+                          onBlur={() => void commitText(i)}
                         />
                       )}
                     </td>
                     <td>
-                      <button title="Delete step" onClick={() => deleteStep.mutate(i)}>
+                      <button
+                        title="Delete step"
+                        onClick={() => {
+                          setTextEdits({}); // indices shift — drop stale buffers
+                          deleteStep.mutate(i);
+                        }}
+                      >
                         ✕
                       </button>
                     </td>
@@ -173,10 +202,8 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
             />
             <button
               className="btn-primary"
-              disabled={!title.trim() || saveRec.isPending}
-              onClick={() =>
-                saveRec.mutate({ title: title.trim() }, { onSuccess: (r) => onOpenFlow(r.path) })
-              }
+              disabled={!title.trim() || saveRec.isPending || updateStep.isPending}
+              onClick={() => void saveFlow().catch(() => {})}
             >
               {saveRec.isPending ? 'Refining intents & saving…' : '💾 Save as flow'}
             </button>
@@ -185,6 +212,31 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
             <div className="esc-error" style={{ margin: '0 16px 12px' }}>
               {(saveRec.error as Error).message}
             </div>
+          )}
+        </div>
+      )}
+
+      {saved && (
+        <div className="card">
+          <div className="row-between" style={{ padding: '13px 16px' }}>
+            <div>
+              ✅ Saved <strong>{saved.title}</strong> — {saved.seededSteps} step
+              {saved.seededSteps === 1 ? '' : 's'} pre-seeded into the locator cache.{' '}
+              {saved.intentSource === 'llm' ? (
+                <span className="badge b-green">intents refined by AI</span>
+              ) : (
+                <span className="badge b-amber">draft intents</span>
+              )}
+            </div>
+            <button className="btn-primary" onClick={() => onOpenFlow(saved.path)}>
+              Open in editor →
+            </button>
+          </div>
+          {saved.refineNote && (
+            <p className="page-sub" style={{ margin: '0 16px 12px' }}>
+              ⓘ {saved.refineNote}. You can polish the intent wording in the editor — better intents
+              heal better.
+            </p>
           )}
         </div>
       )}

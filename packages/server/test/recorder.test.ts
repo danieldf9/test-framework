@@ -5,6 +5,7 @@ import {
   buildCaptureScript,
   draftFromEvent,
   heuristicIntent,
+  parseIntentsReply,
   RecorderController,
   type DraftStep,
 } from '../src/recorder.js';
@@ -215,5 +216,34 @@ describe('buildCaptureScript', () => {
     expect(script).toContain('__sentinelRecorderEmit');
     // idempotent installation guard
     expect(script).toContain('__sentinelRecorderInstalled');
+  });
+
+  it('asserts through an overlay + hit-test, never by intercepting app events', () => {
+    const script = buildCaptureScript('data-qa');
+    expect(script).toContain('__sentinel-assert-overlay');
+    expect(script).toContain('elementFromPoint');
+    // The app must never see half-delivered event sequences in assert mode.
+    expect(script).not.toContain('stopImmediatePropagation');
+    expect(script).not.toContain('preventDefault');
+  });
+});
+
+describe('parseIntentsReply (LLM structured output)', () => {
+  it('parses clean, fenced, and chatter-wrapped replies', () => {
+    expect(parseIntentsReply('{"intents":["a","b"]}', 2)).toEqual(['a', 'b']);
+    expect(parseIntentsReply('```json\n{"intents":["a"]}\n```', 1)).toEqual(['a']);
+    expect(
+      parseIntentsReply('Here you go: {"intents":["a","b"]} — hope that helps! [note: draft]', 2),
+    ).toEqual(['a', 'b']);
+    expect(
+      parseIntentsReply('<thought>[1, 2] tricky brackets</thought>{"intents":["a"]}', 1),
+    ).toEqual(['a']);
+  });
+
+  it('rejects wrong shapes and wrong counts (repair-loop triggers)', () => {
+    expect(() => parseIntentsReply('["a","b"]', 2)).toThrow(); // bare array — not the contract
+    expect(() => parseIntentsReply('{"intents":["a"]}', 2)).toThrow(/exactly 2/);
+    expect(() => parseIntentsReply('{"intents":[1,2]}', 2)).toThrow(/expected/);
+    expect(() => parseIntentsReply('sure, sounds good!', 1)).toThrow(/no JSON/);
   });
 });

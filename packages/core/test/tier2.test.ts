@@ -116,6 +116,40 @@ describe('tier 2 prompt construction', () => {
     expect(includedCount).toBeLessThan(200);
     expect(includedCount).toBeGreaterThan(0);
   });
+
+  it('keeps the likely target under budget pressure even when it sits late in the DOM', () => {
+    const anchor = makeFp({
+      name: 'Place order',
+      text: 'Place order',
+      nearbyText: 'checkout form',
+    });
+    // 150 noise elements, then the drifted-but-similar target at the very end —
+    // a linear prefix cut would drop it and force the model into a false -1.
+    const many = Array.from({ length: 150 }, (_, i) =>
+      makeFp({ name: `Nav link number ${i} totally unrelated`, tag: 'a', role: 'link' }),
+    );
+    many.push(
+      makeFp({ name: 'Place your order', text: 'Place your order', nearbyText: 'checkout form' }),
+    );
+
+    const { includedCount, indexMap, json } = serializeCandidates(many, 3_000, anchor);
+    expect(includedCount).toBeLessThan(many.length); // budget really did prune
+    expect(indexMap).toContain(150); // …but the similar target survived
+    expect(json).toContain('Place your order');
+    // The model's answer is a position in the serialized list; positions map
+    // back to the collected array in original (interactive-first) order.
+    const parsed = JSON.parse(json) as Array<{ i: number }>;
+    parsed.forEach((c, pos) => expect(c.i).toBe(pos));
+    expect(indexMap).toEqual([...indexMap].sort((a, b) => a - b));
+  });
+
+  it('is byte-identical to the legacy output when everything fits', () => {
+    const few = defaultCollected();
+    const anchored = serializeCandidates(few, 24_000, makeFp({ name: 'Place order' }));
+    const plain = serializeCandidates(few, 24_000);
+    expect(anchored.json).toBe(plain.json);
+    expect(anchored.indexMap).toEqual([0, 1]);
+  });
 });
 
 describe('parseHealResponse (Zod validation)', () => {

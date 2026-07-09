@@ -213,8 +213,11 @@ export async function runHealingPipeline(
       };
     }
 
+    // Keep any guard marker (e.g. "[capped: …]") in the refusal: it flows into
+    // the escalation question, where the UI explains WHY confidence was lowered.
+    const guardNote = reasoning.match(/\[[^\]]*\]/g)?.join(' ');
     refusals.push(
-      `tier ${resolver.tier}: confidence ${confidence.toFixed(2)} below apply floor ${ctx.policy.applyFloor}`,
+      `tier ${resolver.tier}: confidence ${confidence.toFixed(2)} below apply floor ${ctx.policy.applyFloor}${guardNote ? ` ${guardNote}` : ''}`,
     );
     rejected.push({ fingerprint: result.fingerprint, score: result.score });
   }

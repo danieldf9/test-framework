@@ -176,3 +176,32 @@ describe('makeTier1Resolver', () => {
     expect(miss).toBeNull();
   });
 });
+
+describe('runHealingPipeline — guard-note propagation (D43)', () => {
+  it('carries [capped: …] markers into the refusal reason for the escalation UI', async () => {
+    const capped: TierResolver = {
+      tier: 2,
+      name: 'fake-capped',
+      async resolve() {
+        return {
+          fingerprint: makeFp({ name: 'Place order', text: 'Place order' }),
+          score: 0.55,
+          secondBest: 0,
+          reasoning:
+            'LLM: looks right. [capped: model confidence 0.95 contradicts DOM similarity 0.12]',
+        };
+      },
+    };
+    const outcome = await runHealingPipeline([capped], {
+      cache: cache(),
+      collected: [],
+      policy,
+      guard: noGuard,
+    });
+    expect(outcome.healed).toBe(false);
+    expect(outcome.reason).toContain('below apply floor');
+    expect(outcome.reason).toContain(
+      '[capped: model confidence 0.95 contradicts DOM similarity 0.12]',
+    );
+  });
+});
