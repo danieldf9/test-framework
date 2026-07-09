@@ -455,3 +455,66 @@ the flow + generated spec, and seeds the Tier-0 locator cache from the recorded
 fingerprints — a recorded test is healable on its very first run. Scope is deliberately
 MVP: top frame only, click/fill/goto (selects, hovers, iframes and assertions are
 authored in the editor afterwards), one session at a time.
+
+## D40 — Verb expansion: select, check, uncheck, press (hover deferred)
+
+Studio Phase 3 lifts the D39 verb restriction: `select` (selectOption by option value),
+`check`/`uncheck`, and `press` (a key on a located element) are first-class healed
+actions everywhere a verb appears — fixture, flow schema, compiler, importer, block
+editor, recorder. Each fixture method is a one-line wrapper over the same
+`runStep(action, args, exec)` funnel click/fill use, so all four inherit fingerprinting,
+tiered healing, escalation, and step recording with no pipeline changes. A select's
+`value` may be the empty string (a legal `<option>` value for placeholder options);
+`press` requires a non-empty key.
+
+Recorder mapping follows native event semantics: `<select>` records from its `change`
+event (last selection wins when re-picked); checkbox/radio moved OUT of the clicky
+pointerdown set and record `check`/`uncheck` from `change` using the committed
+`el.checked` (radios are always `check` — an unselected radio never fires change;
+repeated toggles keep only the final state). `Enter` in a text input records
+`fill → press` in that order: the keydown handler flushes the current value as a fill
+first, emits the press, and suppresses the change event that fires as the form submits —
+otherwise the draft would read press-then-fill and replay wrong.
+
+`hover` is deliberately deferred: hover is almost never a meaningful _recorded_ step
+(it fires constantly while the pointer travels, so capture is noise), and
+hover-revealed UI is exercised by the click that follows it — Playwright auto-hovers
+ancestors on click. If a hover-only assertion ever matters, it belongs in the editor,
+not the recorder.
+
+## D41 — Recorder assert mode: clicks observe instead of act
+
+The recorder gains a server-owned mode toggle (`record`/`assert`). While asserting, a
+click records an expectation on the exact element under the pointer instead of
+interacting: capture-phase `pointerdown` AND `click` handlers both `preventDefault` +
+`stopImmediatePropagation` (pointerdown alone would still let the click activate links),
+then emit an `assert` event. Elements with short visible text (≤60 chars) draft as
+`expectText` with that text; everything else drafts as `expectVisible`. Assert drafts
+can be retyped (visible ⇄ text) and their expected text edited before saving, and any
+draft row can be deleted (also fixes record-mode misclicks) — small PATCH/DELETE routes
+on the draft list, because the flow does not exist yet at that point.
+
+Mode state lives in the RecorderController, not the page: the toggle pushes the new
+mode into the live page (`__sentinelRecorderSetMode`), and the capture script pulls the
+current mode through an exposed binding when it (re)installs — so navigations never
+silently reset an assert session back to record mode. Assert mode targets `e.target`
+directly rather than the interactive-ancestor `closest()` walk used for clicks, because
+assertion targets are usually non-interactive (headings, badges, confirmation text).
+
+## D42 — SSE push channel; polling demoted to fallback
+
+Studio liveness was pure polling (1–4s refetch intervals). One Server-Sent Events
+stream (`GET /api/events`) now pushes typed wake-up signals: `run-started`,
+`run-output`, `run-finished`, `recorder-changed`, `escalation-answered`,
+`promote-applied`. SSE over WebSockets deliberately: every signal flows server→client
+only, `EventSource` reconnects for free, and a raw hijacked Fastify reply needs zero
+new dependencies. Events carry (almost) no data — the client reacts by invalidating
+the matching TanStack Query caches, so pushed and polled refreshes go through the
+exact same fetch path and the SQLite DB stays the single source of truth. Emitters
+poke once per observable change (per output _chunk_, not per line; one
+`recorder-changed` per draft mutation).
+
+Polling is NOT removed — it is relaxed (15s baseline, 5s for the hot views) and kept
+as the fallback for a dropped stream and for the one case push cannot cover: a CLI
+`sentinel run` writing to the DB from outside the server process. The events endpoint
+is registered even in read-only mode; a read-only server simply has fewer emitters.

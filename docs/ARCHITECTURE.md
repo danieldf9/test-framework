@@ -7,15 +7,19 @@ autonomy, and records everything in SQLite for replay, audit, and promotion.
 
 ## Package layout
 
-| Package               | Purpose                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `@sentinel/core`      | `test` fixture (`s.*` actions), diagnosis classifier, Tier 0–1 healing, SQLite store, artifact capture, sanitizer         |
-| `@sentinel/cli`       | `sentinel` command: `init`, `run`, `report`, `summary`, `escalations`, `migrate`, `promote`, `db export/import`, `doctor` |
-| `@sentinel/providers` | `LLMProvider` abstraction, openai-compatible adapter (+ 'openai' preset), retries/backoff/circuit breaker, cost hooks     |
-| `@sentinel/report`    | Static self-contained HTML report: results, heals with before/after screenshots, flake dashboard, LLM costs               |
-| `examples/demo-app`   | Offline demo shop, server-side mutation profiles, `POST /__chaos` switch                                                  |
-| `examples/mock-llm`   | Deterministic OpenAI-compatible mock server used by the chaos harness (offline Tier 2 proof)                              |
-| `examples/tests`      | Intent-annotated example suite + chaos-harness integration test                                                           |
+| Package               | Purpose                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `@sentinel/core`      | `test` fixture (`s.*` actions), diagnosis classifier, Tier 0–1 healing, SQLite store, artifact capture, sanitizer                   |
+| `@sentinel/cli`       | `sentinel` command: `init`, `run`, `report`, `summary`, `escalations`, `migrate`, `promote`, `db export/import`, `doctor`, `studio` |
+| `@sentinel/providers` | `LLMProvider` abstraction, openai-compatible adapter (+ 'openai' preset), retries/backoff/circuit breaker, cost hooks               |
+| `@sentinel/report`    | Static self-contained HTML report + the shared query functions the Studio API reuses                                                |
+| `@sentinel/ops`       | Orchestration shared by CLI and Studio: run spawning/finalizing, promotion planner/applier, git branch + Octokit PR opening         |
+| `@sentinel/flow`      | The no-code flow format (D39): Zod schema, flow → generated-spec compiler, hand-written-spec importer                               |
+| `@sentinel/server`    | Sentinel Studio backend: Fastify JSON API, run controller, Smart Recorder, flow CRUD, SSE event stream, SPA host                    |
+| `@sentinel/web`       | Sentinel Studio SPA (Vite + React + TanStack Query): runs, escalations, promote, flows/block editor, recorder                       |
+| `examples/demo-app`   | Offline demo shop, server-side mutation profiles, `POST /__chaos` switch                                                            |
+| `examples/mock-llm`   | Deterministic OpenAI-compatible mock server used by the chaos harness (offline Tier 2 proof)                                        |
+| `examples/tests`      | Intent-annotated example suite + chaos-harness integration test                                                                     |
 
 ## Step execution & healing pipeline
 
@@ -112,6 +116,34 @@ matching `/sentinel choose <id> <label>`, applies the answer through the same co
 the local CLI, persists the updated cache, and replies with the outcome. `sentinel init`
 scaffolds a self-contained single-job variant for end-user projects.
 
+## Sentinel Studio (web UI)
+
+Studio is a **local-first, single-user** dashboard (`sentinel studio`, binds
+`127.0.0.1:4300`) layered on the same primitives as the CLI — every write goes through
+shared code, never a parallel implementation:
+
+- **Server** (`@sentinel/server`): Fastify app over the SQLite store. Read endpoints
+  reuse `@sentinel/report`'s query functions, so the dashboard and the static report can
+  never diverge. Write endpoints: answer escalations (same `applyEscalationAnswer` as
+  the CLI, channel `web`), trigger runs (spawns `playwright test` via `@sentinel/ops`,
+  one at a time — all other writes 409 while a run is active), promote → PR
+  (`promoteAndOpenPr`: branch, commit, push, Octokit PR; token from
+  `GITHUB_TOKEN`/`SENTINEL_GITHUB_TOKEN`, local-commit-only without one), flow CRUD, and
+  the recorder. Started without a loadable config it degrades to read-only.
+- **Flows** (`@sentinel/flow`, D38/D39): UI-authored tests are JSON flow documents
+  compiled to `@sentinel-generated` specs; hand-written linear specs can be imported
+  (all-or-nothing) with full healing-history migration (`store.rekeyTest`/`rekeyStep`).
+  Verbs: goto, click, fill, select, check, uncheck, press, expectVisible, expectText
+  (D40).
+- **Smart Recorder** (D39/D41): headed Playwright browser; capture-phase listeners
+  fingerprint interactions with the same serialized `sentinelDomAgent` healing uses.
+  Heuristic intents immediately, one batched LLM refinement on save, passwords masked
+  in-page. Assert mode turns clicks into expectVisible/expectText drafts (D41). Saving
+  writes flow + spec and seeds the Tier-0 cache — recorded tests are born healable.
+- **Liveness** (D42): one SSE stream (`GET /api/events`) pushes typed wake-up events
+  (run output/finish, recorder changes, escalation answers, promotions); the SPA
+  invalidates its query caches on each event, with relaxed polling as fallback.
+
 ## Security guardrails in this phase
 
 - DOM snapshots sanitized **in-page** before capture: input values stripped, secret-pattern
@@ -130,3 +162,11 @@ scaffolds a self-contained single-job variant for end-user projects.
 | 4     | Anthropic/OpenAI/Gemini adapters, Tier 3 vision, HTML report                   | ✅ complete — chaos green (vision + report phases); native Gemini adapter + vision verified live      |
 | 5     | GitHub Actions workflows, cache persistence, comment escalation                | ✅ complete — chaos green incl. CI-simulation phase; workflow contracts validated                     |
 | 6     | `migrate` codemod, `promote`, docs polish                                      | ✅ complete — chaos green (migrate-run + promote phases); **all spec phases delivered**               |
+
+### Studio phases (post-spec, D38–D42)
+
+| Studio phase | Scope                                                                                                      | Status      |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | ----------- |
+| 1            | Local dashboard: read API + SPA, escalation answering, run triggering, promote → PR                        | ✅ complete |
+| 2            | `stepKey` identity, flow format + compiler + importer, flow CRUD, Smart Recorder MVP, block editor         | ✅ complete |
+| 3            | Verb expansion (select/check/uncheck/press), recorder assert mode, one-click approvals, SSE liveness, docs | ✅ complete |

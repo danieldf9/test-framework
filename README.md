@@ -55,6 +55,19 @@ test('checkout flow', async ({ page, s }) => {
 > and cannot do, full configuration/CLI reference, and a troubleshooting guide — lives at
 > [docs/USER-MANUAL.md](docs/USER-MANUAL.md).
 
+## Sentinel Studio — the no-code web UI
+
+`npx sentinel studio` opens a local dashboard over the same engine and state DB: trigger
+runs and watch live output, review heals with before/after screenshots, answer
+escalations by clicking a candidate, and promote reviewed heals straight into a
+**GitHub pull request** — no terminal, editor, or git required. Studio also authors
+tests without code: a **block editor** over JSON "flows" that compile to ordinary
+generated specs (with stable step identity, so edits never orphan healing history), and
+a **Smart Recorder** that turns clicking through your app into a flow — LLM-refined
+intent strings, an assert mode for expectations, and a pre-seeded locator cache so
+recorded tests are healable from their first run. See
+[the manual's Studio chapters](docs/USER-MANUAL.md#30-what-is-sentinel-studio).
+
 ## Quickstart
 
 Requires Node 20+ and pnpm.
@@ -238,6 +251,11 @@ spend) that any tool can call. Details:
 packages/core       @sentinel/core — fixture, diagnosis, healing tiers 0-2, SQLite store
 packages/providers  @sentinel/providers — LLMProvider abstraction, adapters, circuit breaker
 packages/cli        @sentinel/cli — sentinel command
+packages/report     @sentinel/report — static HTML report + shared query functions
+packages/ops        @sentinel/ops — run/promotion orchestration shared by CLI & Studio, git + PR
+packages/flow       @sentinel/flow — no-code flow format: schema, compiler, spec importer
+packages/server     @sentinel/server — Studio backend: API, recorder, run controller, SSE
+packages/web        @sentinel/web — Studio SPA (Vite + React)
 examples/demo-app   offline demo shop with chaos mutation profiles
 examples/mock-llm   deterministic OpenAI-compatible mock (offline Tier 2 acceptance test)
 examples/tests      example suite + chaos-harness integration test
@@ -255,13 +273,17 @@ pnpm lint           # eslint + prettier config
 pnpm chaos          # full integration acceptance test
 ```
 
-Project status: **all six spec phases complete.** Core fixture + SQLite state + Tiers 0–1;
-four provider adapters (Anthropic, OpenAI, Gemini, openai-compatible) behind one
-interface; Tier 2 DOM + Tier 3 vision healing with cross-checks; deterministic-first
-diagnosis with LLM arbitration; confidence-tiered autonomy with human escalation (CLI and
-`/sentinel choose` CI comments); static HTML report; sharded GitHub Actions integration
-with locator-cache persistence; `migrate` codemod and `promote` write-back. The chaos
-harness proves the acceptance criteria end-to-end across 12 phases (offline, deterministic);
-Tier 2 verified live on Gemma 4 31B and native Gemini + vision verified live on
-gemini-2.5-flash. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline and
-[docs/DECISIONS.md](docs/DECISIONS.md) for the 37 recorded design decisions.
+Project status: **all six spec phases complete, plus Sentinel Studio (Studio phases
+1–3).** Core fixture + SQLite state + Tiers 0–1; four provider adapters (Anthropic,
+OpenAI, Gemini, openai-compatible) behind one interface; Tier 2 DOM + Tier 3 vision
+healing with cross-checks; deterministic-first diagnosis with LLM arbitration;
+confidence-tiered autonomy with human escalation (CLI and `/sentinel choose` CI
+comments); static HTML report; sharded GitHub Actions integration with locator-cache
+persistence; `migrate` codemod and `promote` write-back. The chaos harness proves the
+acceptance criteria end-to-end across 12 phases (offline, deterministic); Tier 2
+verified live on Gemma 4 31B and native Gemini + vision verified live on
+gemini-2.5-flash. On top of that, Studio delivers the no-code web layer: dashboard,
+live runs, escalation answering, promote-to-PR, flows/block editor, and the Smart
+Recorder with assert mode, over an SSE push stream. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline and
+[docs/DECISIONS.md](docs/DECISIONS.md) for the 42 recorded design decisions.

@@ -60,6 +60,14 @@ wrong.
 28. [Common errors and what they mean](#28-common-errors-and-what-they-mean)
 29. [FAQ](#29-faq)
 
+**Part 6 — Sentinel Studio (the no-code web UI)**
+
+30. [What is Sentinel Studio?](#30-what-is-sentinel-studio)
+31. [Running suites and watching live execution](#31-running-suites-and-watching-live-execution)
+32. [Answering escalations and one-click Promote → PR](#32-answering-escalations-and-one-click-promote--pr)
+33. [Flows: the block editor](#33-flows-the-block-editor)
+34. [The Smart Recorder](#34-the-smart-recorder)
+
 **Appendix**
 
 - [AI agent operations (the sentinel-agent skill)](#appendix--ai-agent-operations-the-sentinel-agent-skill)
@@ -693,11 +701,15 @@ test('…', async ({ page, s }) => { … });
 | `s.goto(url)`                             | `page.goto` + fails on HTTP ≥ 500 + environment retries with backoff + runs configured `preSteps` after arrival | Retries only (nothing to heal) |
 | `s.click({ locator, intent })`            | Click                                                                                                           | ✅                             |
 | `s.fill({ locator, intent, value })`      | Fill an input. **`value` is excluded from all logs, fingerprints, artifacts, and LLM prompts.**                 | ✅                             |
+| `s.select({ locator, intent, value })`    | Select a `<select>` option by its `value` attribute (`locator.selectOption`)                                    | ✅                             |
+| `s.check({ locator, intent })`            | Check a checkbox/radio (`locator.check` — idempotent, unlike a click)                                           | ✅                             |
+| `s.uncheck({ locator, intent })`          | Uncheck a checkbox (`locator.uncheck`)                                                                          | ✅                             |
+| `s.press({ locator, intent, key })`       | Press a key on the located element (e.g. `Enter`, `Escape`, `ArrowDown`)                                        | ✅                             |
 | `s.expectVisible({ locator, intent })`    | Wait for the element to be visible (assertion — extra golden-rule guard applies)                                | ✅                             |
 | `s.expectText({ locator, intent, text })` | Assert exact text via `expect(locator).toHaveText(text)` (assertion — golden-rule guard applies)                | ✅                             |
 | `s.step(description, fn)`                 | Group steps (mirrors `test.step`); group path appears in failure messages, reports, and diagnosis context       | n/a                            |
 
-Anything not in this table (hover, drag, keyboard, uploads, iframes, popups…) — use plain
+Anything not in this table (hover, drag, uploads, iframes, popups…) — use plain
 Playwright `page` APIs; those steps run normally but are not diagnosed or healed.
 
 ## 21. Configuration reference (sentinel.config.ts)
@@ -771,6 +783,7 @@ from the working directory is auto-loaded (only for keys not already set).
 | `sentinel db export`        | Export state to portable JSON. `--json <file>` (default `.sentinel/sentinel-export.json`).                                                                                                    |
 | `sentinel db import <file>` | Merge a JSON export into the local DB (idempotent — safe to import shard exports repeatedly).                                                                                                 |
 | `sentinel doctor`           | Validate config, DB integrity, Playwright availability, and LLM connectivity (live ping). Exit 0 = healthy.                                                                                   |
+| `sentinel studio`           | Launch the Sentinel Studio web dashboard (see [Part 6](#30-what-is-sentinel-studio)). `--port <n>` (default 4300), `--cwd <dir>`, `--no-open`.                                                |
 
 ## 24. Enabling LLM healing (Tiers 2–3)
 
@@ -1059,6 +1072,111 @@ screenshots. Every heal also records the git SHA it happened on.
 
 ---
 
+# Part 6 — Sentinel Studio (the no-code web UI)
+
+## 30. What is Sentinel Studio?
+
+Studio is Sentinel's local web dashboard: a browser UI over the **same** SQLite state DB,
+healing engine, and orchestration the CLI uses, aimed at people who never want to open a
+terminal or an editor — manual QA, PMs, or anyone triaging test health. Nothing in Studio
+is a second implementation: runs go through the same `@sentinel/ops` code path as
+`sentinel run`, escalation answers use the same function the CLI calls, and promotion is
+the same planner behind `sentinel promote`.
+
+```bash
+npx sentinel studio            # starts on http://127.0.0.1:4300 and opens your browser
+npx sentinel studio --port 4400 --no-open
+```
+
+Studio is **local-first and single-user**: it binds to `127.0.0.1` only, has no login,
+and records your OS username as the actor on every action so the audit trail still says
+who did what. Views update live over a push stream (SSE) — you never need to refresh.
+
+If Studio is started in a directory without a `sentinel.config.*`, it runs **read-only**:
+you can browse runs, flake stats, LLM costs and answer escalations, but run-triggering,
+flows, the recorder, and promotion are disabled until it can load the full config.
+
+## 31. Running suites and watching live execution
+
+The **Runs** view lists every run with its status (`passed`, `passed (unverified)`,
+`failed`) plus summary tiles. **Run suite** triggers a run (optionally filtered by grep
+or project) — one run at a time; every write action in Studio is refused with a clear
+message while a run is in flight. The run detail page streams the live Playwright output
+tail and fills in steps, heal cards (tier, confidence, before/after screenshots), and
+escalations as they land in the DB — pushed to the browser the moment they happen.
+
+## 32. Answering escalations and one-click Promote → PR
+
+The **Escalations** view shows every pending question with its candidates (A/B/C/D…),
+confidences, fingerprints, and the failure screenshot. Picking a candidate does exactly
+what the CLI's `--choose` does: the choice becomes the cached primary locator (next run
+heals at Tier 0) and is recorded as a `HUMAN` heal. Picking **Intentional redesign**
+records that the test itself needs updating and caches nothing.
+
+After an answer, Studio shows how many heals are now waiting and offers **Review & open
+PR**, which jumps to the **Promote** view: a dry-run preview of exactly which locator in
+which file changes to what, with conflict guards (contradictory or ambiguity-creating
+promotions are held back for manual review). **Commit & open PR** then branches, commits
+only the changed specs, pushes, and opens a GitHub pull request on your behalf.
+
+For the PR step, set a token in the environment before launching Studio:
+
+```bash
+GITHUB_TOKEN=ghp_…   # or SENTINEL_GITHUB_TOKEN
+```
+
+Without a token, promotion still works — it commits to a local branch and tells you to
+push and open the PR yourself. Nobody ever has to run `git` by hand either way.
+
+## 33. Flows: the block editor
+
+The **Flows** view is the no-code way to author and edit tests. A _flow_ is a JSON
+document (one flow = one test) that Studio compiles into an ordinary generated spec
+(`*.flow.spec.ts`, marked `@sentinel-generated`) that Playwright, CI, and healing treat
+like any hand-written test. The editor gives you step cards you can add, edit, reorder,
+and delete — no code visible anywhere:
+
+- **Verbs:** Go to, Click, Fill, Select option, Check, Uncheck, Press key, Expect
+  visible, Expect text.
+- Every step carries an **intent** (the healing anchor — write it as carefully as you
+  would in code, see [section 12](#12-writing-good-intents-the-most-important-skill))
+  and a **locator** (test id, role, label, placeholder, text, or CSS).
+- Steps can share a **group**, which compiles to an `s.step(…)` block.
+- Reordering or rewording steps never orphans healing history: flow steps carry stable
+  `stepKey`s, and renaming a flow's title migrates its history automatically.
+- **Run** executes just that flow; results stream like any other run.
+
+**Importing hand-written specs:** the Flows view lists existing specs that qualify for
+lifting into flows (linear `s.*` calls with literal values). Importing migrates the
+test's healing history to the new generated file and retires the original as
+`<name>.imported`. Specs that don't qualify simply stay code-only — nothing breaks.
+
+## 34. The Smart Recorder
+
+The **Recorder** turns clicking through your app into a flow. **Start recording** opens
+a real browser window on your machine; interact as a user would:
+
+- Clicks, typing, dropdown selections, checkbox toggles, and `Enter` presses are
+  captured as draft steps. Every interacted element is fingerprinted with the same DOM
+  agent healing uses.
+- Passwords are masked at capture — the value never leaves the page; fill it in later
+  in the flow editor.
+- **Assert mode:** toggle it and your clicks _observe instead of act_ — clicking a
+  confirmation message records an "expect text" step instead of following links or
+  pressing buttons. Toggle back to keep interacting. Assertion drafts can be retyped
+  (visible ⇄ text) and their expected text edited before saving; any misclicked draft
+  row can be deleted.
+- Draft intents appear instantly (accessible name + role); on **Save as flow**, one
+  batched LLM call (when a provider is configured) rewrites them with page context —
+  falling back silently to the heuristics if not.
+- Saving also **seeds the Tier-0 locator cache** from the recorded fingerprints, so a
+  recorded test is healable from its very first run.
+
+Recorder scope: top frame only, one session at a time; iframes and multi-tab flows are
+authored in the editor or in code.
+
+---
+
 # Appendix — AI agent operations (the sentinel-agent skill)
 
 This repository ships a **Claude Code skill** at
@@ -1120,5 +1238,5 @@ and [intent authoring](../.claude/skills/sentinel-agent/references/intent-author
 ---
 
 _Further reading: [ARCHITECTURE.md](ARCHITECTURE.md) (pipeline diagram and data model),
-[DECISIONS.md](DECISIONS.md) (all 37 recorded design decisions and their rationale),
+[DECISIONS.md](DECISIONS.md) (all 42 recorded design decisions and their rationale),
 [README.md](../README.md) (quickstart)._
