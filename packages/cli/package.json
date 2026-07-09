@@ -22,7 +22,7 @@
     "@sentinel/providers": "workspace:*",
     "@sentinel/report": "workspace:*",
     "@sentinel/server": "workspace:*",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "typescript": "^5.7.2"
   },
   "devDependencies": {
