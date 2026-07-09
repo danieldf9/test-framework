@@ -42,8 +42,38 @@ const RUN_LOOKUP_LIMIT = 200;
  * with an in-memory DB. Read endpoints reuse the shared query functions in
  * @sentinel/report so the dashboard and the static HTML report never diverge.
  */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+
+  // Studio is local-first and unauthenticated by design (D44) — the network
+  // boundary is the 127.0.0.1 bind plus these two browser-facing guards:
+  // 1. Host must be local: a browser lured to attacker.example that resolves to
+  //    127.0.0.1 (DNS rebinding) reaches this port with Host: attacker.example.
+  // 2. State-changing requests must not carry a foreign Origin: browsers attach
+  //    Origin to cross-site requests, and "simple" POSTs skip CORS preflight —
+  //    without this, any website could trigger runs or stop a recording. The
+  //    SPA is same-origin (or a local dev port) and CLI tools send no Origin.
+  app.addHook('onRequest', async (req, reply) => {
+    const host = (req.headers.host ?? '').replace(/:\d+$/, '').toLowerCase();
+    if (!LOCAL_HOSTS.has(host)) {
+      return reply.code(403).send({ error: 'Sentinel Studio only answers to localhost' });
+    }
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+    const origin = req.headers.origin;
+    if (origin === undefined) return;
+    let originHost = '';
+    try {
+      originHost = new URL(origin).hostname.toLowerCase();
+    } catch {
+      // unparsable Origin → treated as foreign
+    }
+    if (!LOCAL_HOSTS.has(originHost)) {
+      return reply.code(403).send({ error: 'cross-origin writes are not allowed' });
+    }
+  });
+
   // One SSE stream carries every push signal (D42); polling remains the fallback.
   const events = new StudioEvents();
   app.addHook('onClose', async () => events.close());

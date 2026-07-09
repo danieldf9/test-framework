@@ -44,23 +44,23 @@ jobs:
             echo "valid=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         if: steps.cmd.outputs.valid == 'true'
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         if: steps.cmd.outputs.valid == 'true'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.cmd.outputs.valid == 'true'
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
         if: steps.cmd.outputs.valid == 'true'
       - run: pnpm build
         if: steps.cmd.outputs.valid == 'true'
 
       - name: Restore locator cache
         if: steps.cmd.outputs.valid == 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.WORKDIR }}/.sentinel-ci/cache.json
           key: sentinel-cache-${{ github.ref_name }}-${{ github.run_id }}
@@ -96,7 +96,7 @@ jobs:
         run: |
           mkdir -p .sentinel-ci
           pnpm exec sentinel db export --json .sentinel-ci/cache.json
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.cmd.outputs.valid == 'true' && steps.apply.outputs.code == '0'
         with:
           path: ${{ env.WORKDIR }}/.sentinel-ci/cache.json
@@ -104,7 +104,7 @@ jobs:
 
       - name: Reply with the outcome
         if: steps.cmd.outputs.valid == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           RESULT: ${{ steps.apply.outputs.result }}
           CODE: ${{ steps.apply.outputs.code }}

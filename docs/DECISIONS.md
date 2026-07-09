@@ -559,3 +559,48 @@ plain-English explanation ("the AI was confident, but the element looks very dif
 review: flow-editor goto URLs are validated (`/`-relative or http(s) only), `s.step`
 groups get visual banding in the editor, and the recorder's expected-text edits are
 buffered and flushed before save so a type-then-immediately-save never loses input.
+
+## D44 — Studio threat model: localhost guards over a login system
+
+A security review asked where authentication is. The answer stays "deliberately
+nowhere" — Studio is a local, single-user tool bound to `127.0.0.1` whose actor is the
+OS user — but two real browser-borne gaps in that story are now closed with an
+`onRequest` guard instead of a login system:
+
+- **Host allow-list (DNS-rebinding defense):** a malicious website can point its own
+  domain at 127.0.0.1 and script same-origin requests to the Studio port from the
+  victim's browser. Those requests still carry the attacker's `Host`, so anything not
+  `localhost`/`127.0.0.1`/`[::1]` is refused (reads too — rebinding is an exfil vector).
+- **Foreign-Origin write refusal (cross-site defense):** CORS does not stop "simple"
+  cross-site POSTs from _reaching_ the server, and some write routes need no JSON body
+  (stop a recording, trigger a run). State-changing requests with a non-local `Origin`
+  are refused; requests without one (the CLI, curl) and local origins (the SPA, a Vite
+  dev port) pass. Full origin+port matching was considered and rejected: it would break
+  the dev proxy, and "another local server hosts attacker HTML" is outside this threat
+  model.
+
+Positions on the rest of the review, recorded so they are decisions rather than
+omissions:
+
+- **Actions pinned to commit SHAs + Dependabot + `--frozen-lockfile`** in this repo's
+  workflows (Dependabot keeps the pins fresh; the `sentinel init` template keeps
+  version tags — a SHA baked into a scaffold goes stale in the user's repo with nothing
+  to update it). `gitShaOrNull` also dropped its unnecessary `shell: true` (the npx
+  spawn keeps it: .cmd shims cannot launch without a shell on Windows).
+- **Recorder URLs are not allow-listed** beyond http(s): the headed browser opens on
+  the user's own machine showing the page — it is the user's browser, and pointing it
+  at internal apps (localhost dev servers!) is the primary use case. The remote-attack
+  variant of "SSRF" is exactly what the guards above close.
+- **Flow-route filesystem writes were already contained**: every API-supplied path goes
+  through `resolveInRoot` (escape-refusing) and writes are constrained to
+  `*.flow.json` + derived generated specs.
+- **LLM exposure is a documented trade** (spec §10 posture unchanged): prompts carry
+  element identity (tag/role/name/label/placeholder/nearby text) — never input values
+  (excluded at fingerprint capture; passwords masked in-page), wrapped in UNTRUSTED
+  markers, spend-capped, and fully off with `llm.provider = 'none'`.
+- **SSE statefulness is bounded**: one local user, no per-client buffering, heartbeat
+  timer unref'd, dead sockets dropped on close/error, all connections ended on
+  shutdown.
+
+A hosted multi-user Studio would need real authn/z, CSRF tokens, and per-actor audit —
+that remains explicitly out of scope (D42/D43 non-goals).

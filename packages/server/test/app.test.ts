@@ -285,6 +285,55 @@ describe('Studio read API', () => {
     store.close();
   });
 
+  it('refuses foreign Host headers and cross-origin writes (D44 guards)', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'sentinel-server-'));
+    const store = new SentinelStore(':memory:');
+    const app = await buildApp({ store, artifactsDir: dir, webDir: null });
+
+    // DNS rebinding: attacker.example resolving to 127.0.0.1 still sends its own Host.
+    const rebound = await app.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { host: 'attacker.example' },
+    });
+    expect(rebound.statusCode).toBe(403);
+
+    // Local hosts pass, with or without a port.
+    for (const host of ['127.0.0.1:4300', 'localhost', '[::1]:4300']) {
+      const ok = await app.inject({ method: 'GET', url: '/api/health', headers: { host } });
+      expect(ok.statusCode).toBe(200);
+    }
+
+    // A cross-site "simple" POST (no preflight) carries the attacker's Origin.
+    const xsWrite = await app.inject({
+      method: 'POST',
+      url: '/api/escalations/1/answer',
+      headers: { host: '127.0.0.1:4300', origin: 'https://evil.example' },
+      payload: { choice: 'A' },
+    });
+    expect(xsWrite.statusCode).toBe(403);
+
+    // Same-origin writes pass the guard and reach the real handler (404 here).
+    const sameOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/escalations/999/answer',
+      headers: { host: '127.0.0.1:4300', origin: 'http://127.0.0.1:4300' },
+      payload: { choice: 'A' },
+    });
+    expect(sameOrigin.statusCode).toBe(404);
+
+    // Origin-less writes (CLI tools, curl) are untouched.
+    const curlish = await app.inject({
+      method: 'POST',
+      url: '/api/escalations/999/answer',
+      payload: { choice: 'A' },
+    });
+    expect(curlish.statusCode).toBe(404);
+
+    await app.close();
+    store.close();
+  });
+
   it('gates run triggering when the server has no full config (read-only mode)', async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'sentinel-server-'));
     const store = new SentinelStore(':memory:');

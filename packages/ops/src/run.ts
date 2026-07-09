@@ -35,8 +35,11 @@ export interface StartedRun {
   child: ChildProcess;
 }
 
+// No shell: git is a real executable everywhere and the args are static —
+// keeping a shell out of the trust boundary. (The npx spawn below is different:
+// npx is a .cmd shim on Windows and cannot launch without a shell.)
 export function gitShaOrNull(): string | null {
-  const r = spawnSync('git', ['rev-parse', 'HEAD'], { shell: true, encoding: 'utf8' });
+  const r = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
