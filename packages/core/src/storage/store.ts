@@ -223,6 +223,22 @@ export class SentinelStore {
     return row.n;
   }
 
+  /** Distinct steps with reviewed-but-unpromoted heals — the Studio "ready to
+   * promote" badge. Cheap DB count only; the file-reading planPromotions stays
+   * the authority on what is actually promotable. */
+  countUnpromotedHeals(opts: { includeUnverified?: boolean } = {}): number {
+    const modes = opts.includeUnverified ? ['AUTO', 'HUMAN', 'UNVERIFIED'] : ['AUTO', 'HUMAN'];
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT DISTINCT test_id, step_id FROM heals
+           WHERE mode IN (${modes.map(() => '?').join(',')}) AND promoted = 0
+         )`,
+      )
+      .get(...modes) as { n: number };
+    return row.n;
+  }
+
   healCountForTest(runId: string, testId: string): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS n FROM heals WHERE run_id = ? AND test_id = ?')

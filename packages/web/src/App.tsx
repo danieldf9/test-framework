@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react';
-import { useEscalations, useSummary } from './api';
+import { useEscalations, useStudioEvents, useSummary } from './api';
 import { Escalations } from './views/Escalations';
 import { Flake } from './views/Flake';
 import { FlowEditor } from './views/FlowEditor';
@@ -23,6 +23,7 @@ type View =
 
 export function App(): JSX.Element {
   const [view, setView] = useState<View>({ name: 'runs' });
+  useStudioEvents(); // push channel: invalidates caches the instant the server changes
   const summary = useSummary();
   const escalations = useEscalations();
   const pending = escalations.data?.length ?? 0;
@@ -104,7 +105,9 @@ export function App(): JSX.Element {
           />
         )}
         {view.name === 'recorder' && <Recorder onOpenFlow={openFlow} />}
-        {view.name === 'escalations' && <Escalations />}
+        {view.name === 'escalations' && (
+          <Escalations onOpenPromote={() => setView({ name: 'promote' })} />
+        )}
         {view.name === 'promote' && <Promote />}
         {view.name === 'flake' && <Flake />}
         {view.name === 'llm' && <LlmCosts />}

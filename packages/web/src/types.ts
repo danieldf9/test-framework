@@ -124,6 +124,8 @@ export interface AnswerResult {
   stepId: string;
   redesign: boolean;
   appliedDescriptor: string | null;
+  /** Steps with reviewed-but-unpromoted heals after this answer (one-click PR glue). */
+  promotableCount?: number;
 }
 
 export interface StepRow {
@@ -216,6 +218,22 @@ export type FlowStep =
       masked?: boolean;
     })
   | (FlowStepBase & {
+      action: 'select';
+      stepKey: string;
+      intent: string;
+      locator: LocatorSpec;
+      value: string;
+    })
+  | (FlowStepBase & { action: 'check'; stepKey: string; intent: string; locator: LocatorSpec })
+  | (FlowStepBase & { action: 'uncheck'; stepKey: string; intent: string; locator: LocatorSpec })
+  | (FlowStepBase & {
+      action: 'press';
+      stepKey: string;
+      intent: string;
+      locator: LocatorSpec;
+      key: string;
+    })
+  | (FlowStepBase & {
       action: 'expectVisible';
       stepKey: string;
       intent: string;
@@ -261,16 +279,28 @@ export interface ImportResultBody {
 // ---- Recorder ----------------------------------------------------------------
 
 export interface RecorderStep {
-  action: 'goto' | 'click' | 'fill';
+  action:
+    | 'goto'
+    | 'click'
+    | 'fill'
+    | 'select'
+    | 'check'
+    | 'uncheck'
+    | 'press'
+    | 'expectVisible'
+    | 'expectText';
   intent: string;
   locator?: LocatorSpec;
   value?: string;
   masked?: boolean;
+  key?: string;
+  text?: string;
 }
 
 export interface RecorderStatus {
   active: boolean;
   url: string | null;
+  mode: 'record' | 'assert';
   steps: RecorderStep[];
 }
 

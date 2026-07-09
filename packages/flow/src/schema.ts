@@ -46,6 +46,19 @@ const FillStepSchema = z.object({
   /** True when the recorded value was masked (e.g. a password) and needs filling in. */
   masked: z.boolean().optional(),
 });
+/** Option value (an empty string is a legal <option> value, so no min). */
+const SelectStepSchema = z.object({
+  action: z.literal('select'),
+  ...keyed,
+  value: z.string(),
+});
+const CheckStepSchema = z.object({ action: z.literal('check'), ...keyed });
+const UncheckStepSchema = z.object({ action: z.literal('uncheck'), ...keyed });
+const PressStepSchema = z.object({
+  action: z.literal('press'),
+  ...keyed,
+  key: z.string().min(1),
+});
 const ExpectVisibleStepSchema = z.object({ action: z.literal('expectVisible'), ...keyed });
 const ExpectTextStepSchema = z.object({
   action: z.literal('expectText'),
@@ -57,6 +70,10 @@ export const FlowStepSchema = z.discriminatedUnion('action', [
   GotoStepSchema,
   ClickStepSchema,
   FillStepSchema,
+  SelectStepSchema,
+  CheckStepSchema,
+  UncheckStepSchema,
+  PressStepSchema,
   ExpectVisibleStepSchema,
   ExpectTextStepSchema,
 ]);

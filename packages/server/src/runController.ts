@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import type { LoadedConfig, SentinelStore } from '@sentinel/core';
 import { finalizeRun, startRun } from '@sentinel/ops';
+import type { StudioEvents } from './events.js';
 
 export interface RunStatus {
   runId: string;
@@ -33,6 +34,7 @@ export class RunController {
   constructor(
     private readonly store: SentinelStore,
     private readonly loaded: LoadedConfig,
+    private readonly events?: StudioEvents,
   ) {}
 
   isActive(): boolean {
@@ -51,6 +53,7 @@ export class RunController {
       cwd: this.loaded.rootDir,
     });
     this.active = { runId, child, startedAt: Date.now(), output };
+    this.events?.emit('run-started', { runId });
 
     const absorb = (buf: Buffer) => {
       for (const line of buf.toString().split(/\r?\n/)) {
@@ -58,6 +61,8 @@ export class RunController {
         output.push(line);
         if (output.length > MAX_OUTPUT_LINES) output.shift();
       }
+      // One poke per chunk (not per line): subscribers refetch the tail anyway.
+      this.events?.emit('run-output', { runId });
     };
     child.stdout?.on('data', absorb);
     child.stderr?.on('data', absorb);
@@ -77,6 +82,7 @@ export class RunController {
         status,
       };
       this.active = null;
+      this.events?.emit('run-finished', { runId, status });
     };
     let settled = false;
     const once = (code: number | null) => {

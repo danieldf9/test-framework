@@ -1,5 +1,13 @@
 import { useState, type JSX } from 'react';
-import { useRecorderStatus, useSaveRecording, useStartRecording, useStopRecording } from '../api';
+import {
+  useDeleteRecorderStep,
+  useRecorderStatus,
+  useSaveRecording,
+  useSetRecorderMode,
+  useStartRecording,
+  useStopRecording,
+  useUpdateRecorderStep,
+} from '../api';
 
 export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void }): JSX.Element {
   const [url, setUrl] = useState('http://127.0.0.1:4173/products');
@@ -10,8 +18,12 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
   const start = useStartRecording();
   const stop = useStopRecording();
   const saveRec = useSaveRecording();
+  const setMode = useSetRecorderMode();
+  const updateStep = useUpdateRecorderStep();
+  const deleteStep = useDeleteRecorderStep();
 
   const active = status.data?.active ?? false;
+  const mode = status.data?.mode ?? 'record';
   const steps = status.data?.steps ?? [];
   const canSave = !active && steps.length > 0;
 
@@ -44,9 +56,23 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
               {start.isPending ? 'Opening browser…' : '⏺ Start recording'}
             </button>
           ) : (
-            <button className="btn-danger" disabled={stop.isPending} onClick={() => stop.mutate()}>
-              ⏹ Stop
-            </button>
+            <>
+              <button
+                className={mode === 'assert' ? 'btn-primary' : 'btn-secondary'}
+                disabled={setMode.isPending}
+                title="While asserting, clicks record an expectation instead of interacting"
+                onClick={() => setMode.mutate(mode === 'assert' ? 'record' : 'assert')}
+              >
+                {mode === 'assert' ? '✓ Assert mode on' : '◎ Assert mode'}
+              </button>
+              <button
+                className="btn-danger"
+                disabled={stop.isPending}
+                onClick={() => stop.mutate()}
+              >
+                ⏹ Stop
+              </button>
+            </>
           )}
         </div>
         {start.isError && (
@@ -68,26 +94,64 @@ export function Recorder({ onOpenFlow }: { onOpenFlow: (path: string) => void })
                 <th>Action</th>
                 <th>Intent (draft)</th>
                 <th>Details</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {steps.map((s, i) => (
-                <tr key={i}>
-                  <td>{i + 1}</td>
-                  <td>
-                    <span className="badge b-blue">{s.action}</span>
-                  </td>
-                  <td>{s.intent}</td>
-                  <td className="mono-sm">
-                    {s.locator ? `${s.locator.kind}: ${s.locator.name ?? s.locator.value}` : ''}
-                    {s.value !== undefined && !s.masked && ` = "${s.value}"`}
-                    {s.masked && ' (masked)'}
-                  </td>
-                </tr>
-              ))}
+              {steps.map((s, i) => {
+                const isExpect = s.action === 'expectVisible' || s.action === 'expectText';
+                return (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td>
+                      {isExpect ? (
+                        <select
+                          value={s.action}
+                          onChange={(e) =>
+                            updateStep.mutate({
+                              index: i,
+                              action: e.target.value as 'expectVisible' | 'expectText',
+                            })
+                          }
+                        >
+                          <option value="expectVisible">expectVisible</option>
+                          <option value="expectText">expectText</option>
+                        </select>
+                      ) : (
+                        <span className="badge b-blue">{s.action}</span>
+                      )}
+                    </td>
+                    <td>{s.intent}</td>
+                    <td className="mono-sm">
+                      {s.locator ? `${s.locator.kind}: ${s.locator.name ?? s.locator.value}` : ''}
+                      {s.value !== undefined && !s.masked && ` = "${s.value}"`}
+                      {s.masked && ' (masked)'}
+                      {s.key !== undefined && ` ⏎ ${s.key}`}
+                      {s.action === 'expectText' && (
+                        <input
+                          // Uncontrolled + commit-on-blur: the 1s status poll must
+                          // not clobber typing, and one PATCH per keystroke is noise.
+                          defaultValue={s.text ?? ''}
+                          placeholder="expected text"
+                          onBlur={(e) => {
+                            if (e.target.value !== (s.text ?? '')) {
+                              updateStep.mutate({ index: i, text: e.target.value });
+                            }
+                          }}
+                        />
+                      )}
+                    </td>
+                    <td>
+                      <button title="Delete step" onClick={() => deleteStep.mutate(i)}>
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
               {steps.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty">
+                  <td colSpan={5} className="empty">
                     Waiting for the first interaction…
                   </td>
                 </tr>

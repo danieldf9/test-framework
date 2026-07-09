@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { LoadedConfig, SentinelStore as SentinelStoreType } from '@sentinel/core';
@@ -182,6 +183,8 @@ describe('Studio read API', () => {
     });
     expect(answer.statusCode).toBe(200);
     expect(answer.json().appliedDescriptor).toContain('Add to bag');
+    // The answer wrote a HUMAN heal → one step is now ready to promote (3c glue).
+    expect(answer.json().promotableCount).toBe(1);
 
     // The chosen candidate is now the cached primary → next run heals at Tier 0.
     expect(store.getCacheEntry('shop.spec.ts::cart', 's1')?.primary).toBeTruthy();
@@ -204,6 +207,80 @@ describe('Studio read API', () => {
     });
     expect(missing.statusCode).toBe(404);
 
+    await app.close();
+    store.close();
+  });
+
+  it('pushes SSE events on /api/events when an escalation is answered (D42)', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'sentinel-server-'));
+    const store = new SentinelStore(':memory:');
+    store.ensureRun('run-1', 'sha-1', 'auto');
+    const fp = {
+      tag: 'button',
+      role: 'button',
+      name: 'Add to bag',
+      text: 'Add to bag',
+      id: null,
+      testId: null,
+      classes: [],
+      attributes: {},
+      nearbyText: '',
+      labelText: '',
+      cssPath: 'body > button:nth-of-type(1)',
+    };
+    const escId = store.recordEscalation({
+      runId: 'run-1',
+      testId: 'shop.spec.ts::cart',
+      stepId: 's1',
+      question: {
+        test: 'shop.spec.ts::cart',
+        step: 's1',
+        intent: 'Add to cart button',
+        question: 'Which candidate matches?',
+        candidates: [
+          {
+            label: 'A',
+            descriptor: { kind: 'role', value: 'button', name: 'Add to bag', exact: true },
+            confidence: 0.7,
+            fingerprint: fp,
+          },
+        ],
+        context: { url: '/products', classification: 'LOCATOR_DRIFT', screenshot: null },
+      },
+    });
+
+    const app = await buildApp({ store, artifactsDir: dir, webDir: null, actor: 'tester' });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    // A real socket subscriber: the SSE reply is hijacked, so inject() can't see it.
+    let received = '';
+    const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('text/event-stream');
+      res.on('data', (chunk: Buffer) => (received += String(chunk)));
+    });
+    const until = async (predicate: () => boolean, what: string): Promise<void> => {
+      const deadline = Date.now() + 5000;
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}: ${received}`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    };
+    await until(() => received.includes(': connected'), 'the SSE handshake');
+
+    const answer = await app.inject({
+      method: 'POST',
+      url: `/api/escalations/${escId}/answer`,
+      payload: { choice: 'A' },
+    });
+    expect(answer.statusCode).toBe(200);
+
+    await until(() => received.includes('event: escalation-answered'), 'the answered event');
+    expect(received).toContain('"promotableCount":1');
+
+    req.destroy();
     await app.close();
     store.close();
   });

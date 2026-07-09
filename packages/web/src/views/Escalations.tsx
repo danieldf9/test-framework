@@ -2,8 +2,11 @@ import { useState, type JSX } from 'react';
 import { useAnswerEscalation, useEscalations } from '../api';
 import type { PendingEscalation } from '../types';
 
-export function Escalations(): JSX.Element {
+export function Escalations({ onOpenPromote }: { onOpenPromote: () => void }): JSX.Element {
   const { data, isLoading } = useEscalations();
+  // Answered cards vanish from the pending list, so the "what next" nudge lives
+  // at the page level: answer → see how many heals wait → jump to Promote & PR.
+  const [promotable, setPromotable] = useState<number | null>(null);
 
   return (
     <div>
@@ -14,6 +17,20 @@ export function Escalations(): JSX.Element {
         as an intentional redesign.
       </p>
 
+      {promotable !== null && promotable > 0 && (
+        <div className="card">
+          <div className="row-between" style={{ padding: '13px 16px' }}>
+            <span>
+              ✅ Answer saved — {promotable} heal{promotable === 1 ? ' is' : 's are'} ready to be
+              written back into the specs.
+            </span>
+            <button className="btn-primary" onClick={onOpenPromote}>
+              Review &amp; open PR →
+            </button>
+          </div>
+        </div>
+      )}
+
       {isLoading && <div className="state">Loading…</div>}
       {data?.length === 0 && (
         <div className="card">
@@ -21,20 +38,29 @@ export function Escalations(): JSX.Element {
         </div>
       )}
       {data?.map((e) => (
-        <EscalationCard key={e.id} esc={e} />
+        <EscalationCard key={e.id} esc={e} onAnswered={setPromotable} />
       ))}
     </div>
   );
 }
 
-function EscalationCard({ esc }: { esc: PendingEscalation }): JSX.Element {
+function EscalationCard({
+  esc,
+  onAnswered,
+}: {
+  esc: PendingEscalation;
+  onAnswered: (promotableCount: number) => void;
+}): JSX.Element {
   const answer = useAnswerEscalation();
   const [choice, setChoice] = useState<string | null>(null);
   const q = esc.question;
 
   const submit = (c: string) => {
     setChoice(c);
-    answer.mutate({ id: esc.id, choice: c });
+    answer.mutate(
+      { id: esc.id, choice: c },
+      { onSuccess: (r) => onAnswered(r.promotableCount ?? 0) },
+    );
   };
 
   return (

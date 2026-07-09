@@ -16,6 +16,7 @@ const STYLE = `
   form { background: #fff; border-radius: 10px; padding: 22px; max-width: 430px; }
   label { display: block; font-weight: 600; margin-bottom: 6px; }
   .input { width: 100%; padding: 9px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 14px; box-sizing: border-box; }
+  .check-label { display: flex; gap: 8px; align-items: center; font-weight: 400; margin-bottom: 14px; }
   .form-note { color: #667; font-size: 13px; }
   .confirmation { margin-top: 18px; padding: 14px 18px; background: #dcfce7; border: 1px solid #16a34a; border-radius: 8px; font-weight: 600; }
   #consent-banner { position: fixed; bottom: 0; left: 0; right: 0; background: #111; color: #eee; padding: 12px 28px; display: flex; justify-content: space-between; align-items: center; }
@@ -148,6 +149,15 @@ export function renderCheckout(profile) {
         required: 'required',
       })}>
       <p class="form-note">We will email your receipt.</p>
+      <label for="shipping">Shipping method</label>
+      <select id="shipping" class="input" name="shipping" data-testid="shipping-method">
+        <option value="standard">Standard (3-5 days)</option>
+        <option value="express">Express (1-2 days)</option>
+      </select>
+      <label class="check-label">
+        <input type="checkbox" id="newsletter" name="newsletter" data-testid="newsletter-opt-in">
+        Email me special offers
+      </label>
       ${
         o.wrapped === 'deep'
           ? `<div class="action-row"><div class="action-cell">${orderButton}</div></div>`

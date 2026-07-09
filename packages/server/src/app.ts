@@ -16,6 +16,7 @@ import {
 } from '@sentinel/report';
 import { previewPromotions, promoteAndOpenPr } from '@sentinel/ops';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { StudioEvents } from './events.js';
 import { registerFlowRoutes } from './flowRoutes.js';
 import { RecorderController } from './recorder.js';
 import { registerRecorderRoutes } from './recorderRoutes.js';
@@ -43,8 +44,11 @@ const RUN_LOOKUP_LIMIT = 200;
  */
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  // One SSE stream carries every push signal (D42); polling remains the fallback.
+  const events = new StudioEvents();
+  app.addHook('onClose', async () => events.close());
   // Run-triggering is available only when the full config is provided.
-  const runner = deps.loaded ? new RunController(deps.store, deps.loaded) : null;
+  const runner = deps.loaded ? new RunController(deps.store, deps.loaded, events) : null;
 
   // Heal screenshots are written under artifactsDir; serve that tree read-only.
   await app.register(fastifyStatic, {
@@ -67,6 +71,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     q ? { ...q, context: { ...q.context, screenshot: shotUrl(q.context?.screenshot ?? null) } } : q;
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  // Live updates: available even read-only — events are wake-up pokes, not data.
+  app.get('/api/events', (_req, reply) => {
+    events.subscribe(reply);
+  });
 
   // Structured run summary (drop the GitHub-comment markdown field).
   app.get('/api/summary', async () => {
@@ -121,7 +130,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         return { error: 'body must include a non-empty "choice" (candidate label or REDESIGN)' };
       }
       try {
-        return applyEscalationAnswer(deps.store, id, choice, deps.actor ?? 'studio', 'web');
+        const result = applyEscalationAnswer(deps.store, id, choice, deps.actor ?? 'studio', 'web');
+        // A candidate answer writes a HUMAN heal — tell the UI how many steps are
+        // now waiting so it can offer the one-click jump to Promote & PR.
+        const promotableCount = deps.store.countUnpromotedHeals();
+        events.emit('escalation-answered', { escalationId: id, promotableCount });
+        return { ...result, promotableCount };
       } catch (err) {
         const msg = (err as Error).message;
         const code = /not found/.test(msg) ? 404 : /is already/.test(msg) ? 409 : 400;
@@ -186,12 +200,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         return { error: busy };
       }
       const token = process.env.GITHUB_TOKEN || process.env.SENTINEL_GITHUB_TOKEN || undefined;
-      return promoteAndOpenPr(deps.store, rootDir, {
+      const result = await promoteAndOpenPr(deps.store, rootDir, {
         includeUnverified: req.body?.includeUnverified,
         branch: req.body?.branch,
         push: req.body?.push,
         githubToken: token,
       });
+      events.emit('promote-applied', { prUrl: result.prUrl ?? null });
+      return result;
     },
   );
 
@@ -203,7 +219,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       writeBlocked: () => runBusy(),
     });
     // ---- Smart Recorder (D39): one session, headed browser, cache seeding ----
-    const recorder = new RecorderController(deps.store, deps.loaded);
+    const recorder = new RecorderController(deps.store, deps.loaded, events);
     registerRecorderRoutes(app, { recorder, writeBlocked: () => runBusy() });
     app.addHook('onClose', async () => {
       await recorder.stop().catch(() => {});

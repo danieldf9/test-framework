@@ -57,6 +57,41 @@ describe('SentinelStore heal caps', () => {
     expect(s.healCountForTest('r1', 't1')).toBe(2);
     s.close();
   });
+
+  it('counts distinct unpromoted reviewed steps for the promote badge', () => {
+    const s = mem();
+    s.ensureRun('r1', null, 'auto');
+    const heal = (
+      testId: string,
+      stepId: string,
+      mode: 'AUTO' | 'HUMAN' | 'UNVERIFIED' | 'SUGGESTED',
+    ) =>
+      s.recordHeal({
+        runId: 'r1',
+        testId,
+        stepId,
+        intent: 'i',
+        oldLocator: 'a',
+        newLocator: 'b',
+        tier: 0,
+        confidence: 0.95,
+        mode,
+        reasoning: '',
+        screenshotBefore: null,
+        screenshotAfter: null,
+        gitSha: null,
+      });
+    heal('t1', 's1', 'AUTO');
+    heal('t1', 's1', 'AUTO'); // same step healed twice → one promotable step
+    heal('t1', 's2', 'HUMAN');
+    heal('t2', 's1', 'UNVERIFIED');
+    heal('t2', 's2', 'SUGGESTED'); // suggestions are never promotable
+    expect(s.countUnpromotedHeals()).toBe(2);
+    expect(s.countUnpromotedHeals({ includeUnverified: true })).toBe(3);
+    s.db.prepare(`UPDATE heals SET promoted = 1 WHERE test_id = 't1'`).run();
+    expect(s.countUnpromotedHeals()).toBe(0);
+    s.close();
+  });
 });
 
 describe('SentinelStore flake detection', () => {

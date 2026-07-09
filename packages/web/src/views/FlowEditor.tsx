@@ -12,6 +12,10 @@ const ACTION_LABEL: Record<FlowStep['action'], string> = {
   goto: 'Go to',
   click: 'Click',
   fill: 'Fill',
+  select: 'Select option',
+  check: 'Check',
+  uncheck: 'Uncheck',
+  press: 'Press key',
   expectVisible: 'Expect visible',
   expectText: 'Expect text',
 };
@@ -26,6 +30,8 @@ function newStep(action: FlowStep['action']): FlowStep {
     locator: { kind: 'css', value: '' } as LocatorSpec,
   };
   if (action === 'fill') return { action, ...base, value: '' };
+  if (action === 'select') return { action, ...base, value: '' };
+  if (action === 'press') return { action, ...base, key: 'Enter' };
   if (action === 'expectText') return { action, ...base, text: '' };
   return { action, ...base } as FlowStep;
 }
@@ -34,6 +40,7 @@ function stepProblem(step: FlowStep): string | null {
   if (step.action === 'goto') return step.url.trim() ? null : 'URL is required';
   if (!step.intent.trim()) return 'intent is required';
   if (!step.locator.value.trim()) return 'locator value is required';
+  if (step.action === 'press' && !step.key.trim()) return 'key is required';
   return null;
 }
 
@@ -230,6 +237,26 @@ function StepCard({
                   value={step.value}
                   placeholder={step.masked ? '(masked during recording — fill in)' : ''}
                   onChange={(e) => set({ value: e.target.value, masked: false })}
+                />
+              </label>
+            )}
+            {step.action === 'select' && (
+              <label className="field">
+                Option value to select
+                <input
+                  value={step.value}
+                  placeholder="e.g. express (the option's value attribute)"
+                  onChange={(e) => set({ value: e.target.value })}
+                />
+              </label>
+            )}
+            {step.action === 'press' && (
+              <label className="field">
+                Key to press
+                <input
+                  value={step.key}
+                  placeholder="e.g. Enter, Escape, ArrowDown"
+                  onChange={(e) => set({ key: e.target.value })}
                 />
               </label>
             )}

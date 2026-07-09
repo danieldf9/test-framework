@@ -1,5 +1,15 @@
 /** Kinds of interactions the sentinel fixture supports. */
-export type ActionKind = 'goto' | 'click' | 'fill' | 'expectVisible' | 'expectText' | 'preStep';
+export type ActionKind =
+  | 'goto'
+  | 'click'
+  | 'fill'
+  | 'select'
+  | 'check'
+  | 'uncheck'
+  | 'press'
+  | 'expectVisible'
+  | 'expectText'
+  | 'preStep';
 
 /** Actions whose success asserts product behavior. Heals of these are guarded:
  * the healed element must carry the same semantic text content, otherwise the

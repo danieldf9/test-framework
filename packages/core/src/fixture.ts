@@ -209,6 +209,28 @@ export class SentinelActions {
     );
   }
 
+  async select(args: StepArgs & { value: string }): Promise<void> {
+    await this.runStep('select', args, async (loc) => {
+      await loc.selectOption(args.value, { timeout: this.cfg.actionTimeoutMs });
+    });
+  }
+
+  async check(args: StepArgs): Promise<void> {
+    await this.runStep('check', args, (loc) => loc.check({ timeout: this.cfg.actionTimeoutMs }));
+  }
+
+  async uncheck(args: StepArgs): Promise<void> {
+    await this.runStep('uncheck', args, (loc) =>
+      loc.uncheck({ timeout: this.cfg.actionTimeoutMs }),
+    );
+  }
+
+  async press(args: StepArgs & { key: string }): Promise<void> {
+    await this.runStep('press', args, (loc) =>
+      loc.press(args.key, { timeout: this.cfg.actionTimeoutMs }),
+    );
+  }
+
   async expectVisible(args: StepArgs): Promise<void> {
     await this.runStep('expectVisible', args, (loc) =>
       loc.waitFor({ state: 'visible', timeout: this.cfg.actionTimeoutMs }),

@@ -32,6 +32,32 @@ const flow: Flow = {
       group: 'fill contact details',
     },
     {
+      action: 'select',
+      stepKey: 'k-ship',
+      intent: 'Shipping method dropdown',
+      locator: { kind: 'label', value: 'Shipping', exact: true },
+      value: 'express',
+    },
+    {
+      action: 'check',
+      stepKey: 'k-terms',
+      intent: 'Accept terms checkbox',
+      locator: { kind: 'role', value: 'checkbox', name: 'I agree', exact: true },
+    },
+    {
+      action: 'uncheck',
+      stepKey: 'k-news',
+      intent: 'Newsletter opt-in checkbox',
+      locator: { kind: 'testid', value: 'newsletter' },
+    },
+    {
+      action: 'press',
+      stepKey: 'k-search',
+      intent: 'Coupon code input',
+      locator: { kind: 'placeholder', value: 'Coupon' },
+      key: 'Enter',
+    },
+    {
       action: 'expectVisible',
       stepKey: 'k-confirm',
       intent: 'Order confirmation message',
@@ -61,6 +87,17 @@ describe('schema', () => {
     ).toThrow(/intent/);
   });
 
+  it('requires a non-empty key on press but allows an empty select value', () => {
+    const base = { stepKey: 'k1', intent: 'x', locator: { kind: 'css', value: '#x' } };
+    expect(() =>
+      parseFlow({ version: 1, title: 't', steps: [{ action: 'press', ...base, key: '' }] }),
+    ).toThrow(/key/);
+    // '' is a legal <option> value (placeholder options) — must not be rejected.
+    expect(() =>
+      parseFlow({ version: 1, title: 't', steps: [{ action: 'select', ...base, value: '' }] }),
+    ).not.toThrow();
+  });
+
   it('maps flow file paths to generated spec paths', () => {
     expect(specPathForFlow('specs/checkout.flow.json')).toBe('specs/checkout.flow.spec.ts');
     expect(() => specPathForFlow('specs/checkout.json')).toThrow(/not a flow file/);
@@ -84,6 +121,13 @@ describe('compileFlow', () => {
     expect(code).toContain(
       `locator: page.getByRole('status', { name: 'Order confirmed', exact: true }),`,
     );
+    // Phase 3 verbs emit their per-verb extras
+    expect(code).toContain(`await s.select({`);
+    expect(code).toContain(`value: 'express',`);
+    expect(code).toContain(`await s.check({`);
+    expect(code).toContain(`await s.uncheck({`);
+    expect(code).toContain(`await s.press({`);
+    expect(code).toContain(`key: 'Enter',`);
   });
 
   it('locatorCode covers every descriptor kind', () => {

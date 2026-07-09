@@ -47,7 +47,8 @@ function stepCode(step: FlowStep, indent: string): string {
     `locator: ${locatorCode(step.locator)}`,
     `intent: ${q(step.intent)}`,
   ];
-  if (step.action === 'fill') props.push(`value: ${q(step.value)}`);
+  if (step.action === 'fill' || step.action === 'select') props.push(`value: ${q(step.value)}`);
+  if (step.action === 'press') props.push(`key: ${q(step.key)}`);
   if (step.action === 'expectText') props.push(`text: ${q(step.text)}`);
   const body = props.map((p) => `${indent}  ${p},`).join('\n');
   return `${indent}await s.${step.action}({\n${body}\n${indent}});`;

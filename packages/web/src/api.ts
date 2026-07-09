@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ActiveRun,
@@ -25,7 +26,11 @@ async function getJson<T>(pathname: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function sendJson<T>(pathname: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {
+async function sendJson<T>(
+  pathname: string,
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  body: unknown,
+): Promise<T> {
   const res = await fetch(pathname, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -36,8 +41,50 @@ async function sendJson<T>(pathname: string, method: 'POST' | 'PUT', body: unkno
   return data;
 }
 
-/** Polling cadence for the live-ish dashboard (a run writes to the DB we read). */
-const POLL_MS = 4000;
+/** Fallback polling cadence. Since D42 the primary liveness signal is the SSE
+ * stream (useStudioEvents); polling only covers a dropped stream or an external
+ * CLI run the server cannot observe, so it can afford to be slow. */
+const POLL_MS = 15_000;
+
+/**
+ * Subscribe to the Studio push stream (GET /api/events). Events carry no data —
+ * they are wake-up pokes that invalidate the matching TanStack Query caches, so
+ * every view refreshes through the exact same fetch path polling uses.
+ */
+export function useStudioEvents(): void {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const es = new EventSource('/api/events');
+    const poke =
+      (...keys: string[][]) =>
+      () => {
+        // ['run'] prefix-matches every open run-detail query.
+        for (const k of keys) void qc.invalidateQueries({ queryKey: k });
+      };
+    const listeners: Array<[string, () => void]> = [
+      ['run-started', poke(['runs'], ['run'], ['active-run'], ['summary'])],
+      ['run-output', poke(['active-run'], ['run'])],
+      [
+        'run-finished',
+        poke(
+          ['runs'],
+          ['run'],
+          ['active-run'],
+          ['summary'],
+          ['flake'],
+          ['llm-costs'],
+          ['escalations'],
+          ['promote-preview'],
+        ),
+      ],
+      ['recorder-changed', poke(['recorder'])],
+      ['escalation-answered', poke(['escalations'], ['summary'], ['runs'], ['promote-preview'])],
+      ['promote-applied', poke(['promote-preview'], ['runs'], ['summary'])],
+    ];
+    for (const [type, fn] of listeners) es.addEventListener(type, fn);
+    return () => es.close(); // EventSource auto-reconnects while mounted
+  }, [qc]);
+}
 
 export function useSummary() {
   return useQuery({
@@ -61,7 +108,7 @@ export function useRun(id: string | null) {
     enabled: id != null,
     queryFn: () => getJson<RunDetailResponse>(`/api/runs/${id}`),
     // Poll fast while the run is still in flight, then relax.
-    refetchInterval: (query) => (query.state.data?.running ? 1500 : POLL_MS),
+    refetchInterval: (query) => (query.state.data?.running ? 5000 : POLL_MS),
   });
 }
 
@@ -93,7 +140,7 @@ export function useActiveRun() {
   return useQuery({
     queryKey: ['active-run'],
     queryFn: () => getJson<ActiveRun>('/api/runs/active'),
-    refetchInterval: 1500,
+    refetchInterval: 5000,
   });
 }
 
@@ -213,7 +260,7 @@ export function useRecorderStatus(enabled: boolean) {
     queryKey: ['recorder'],
     enabled,
     queryFn: () => getJson<RecorderStatus>('/api/recorder/status'),
-    refetchInterval: 1000,
+    refetchInterval: 5000,
   });
 }
 
@@ -243,6 +290,39 @@ export function useSaveRecording() {
       qc.invalidateQueries({ queryKey: ['recorder'] });
       qc.invalidateQueries({ queryKey: ['flows'] });
     },
+  });
+}
+
+export function useSetRecorderMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: 'record' | 'assert') =>
+      sendJson<RecorderStatus>('/api/recorder/mode', 'POST', { mode }),
+    onSuccess: (status) => qc.setQueryData(['recorder'], status),
+  });
+}
+
+export function useUpdateRecorderStep() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      index,
+      ...patch
+    }: {
+      index: number;
+      action?: 'expectVisible' | 'expectText';
+      text?: string;
+    }) => sendJson<RecorderStatus>(`/api/recorder/steps/${index}`, 'PATCH', patch),
+    onSuccess: (status) => qc.setQueryData(['recorder'], status),
+  });
+}
+
+export function useDeleteRecorderStep() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (index: number) =>
+      sendJson<RecorderStatus>(`/api/recorder/steps/${index}`, 'DELETE', {}),
+    onSuccess: (status) => qc.setQueryData(['recorder'], status),
   });
 }
 

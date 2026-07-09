@@ -5,6 +5,7 @@ import {
   buildCaptureScript,
   draftFromEvent,
   heuristicIntent,
+  RecorderController,
   type DraftStep,
 } from '../src/recorder.js';
 
@@ -78,6 +79,131 @@ describe('draftFromEvent + appendDraft', () => {
     expect(steps).toHaveLength(2);
     expect(steps[1]!.masked).toBe(true);
     expect(steps[1]!.value).toBe('');
+  });
+
+  it('converts select changes and coalesces re-selection on the same dropdown', () => {
+    const shipFp = fp({
+      tag: 'select',
+      role: 'combobox',
+      labelText: 'Shipping',
+      cssPath: 'body > select:nth-of-type(1)',
+    });
+    const steps: DraftStep[] = [];
+    appendDraft(steps, draftFromEvent({ type: 'select', fingerprint: shipFp, value: 'std' })!);
+    appendDraft(steps, draftFromEvent({ type: 'select', fingerprint: shipFp, value: 'express' })!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.action).toBe('select');
+    expect(steps[0]!.value).toBe('express'); // last selection wins
+    expect(steps[0]!.intent).toBe('Shipping dropdown');
+  });
+
+  it('keeps only the final state when a checkbox is toggled repeatedly', () => {
+    const termsFp = fp({
+      tag: 'input',
+      role: 'checkbox',
+      labelText: 'I agree',
+      name: 'I agree',
+      cssPath: 'body > input:nth-of-type(3)',
+    });
+    const steps: DraftStep[] = [];
+    appendDraft(steps, draftFromEvent({ type: 'check', fingerprint: termsFp })!);
+    appendDraft(steps, draftFromEvent({ type: 'uncheck', fingerprint: termsFp })!);
+    appendDraft(steps, draftFromEvent({ type: 'check', fingerprint: termsFp })!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.action).toBe('check');
+    expect(steps[0]!.intent).toBe('I agree checkbox');
+  });
+
+  it('does not coalesce a select with a fill on the same element path', () => {
+    const path = 'body > input:nth-of-type(1)';
+    const steps: DraftStep[] = [];
+    appendDraft(
+      steps,
+      draftFromEvent({
+        type: 'fill',
+        fingerprint: fp({ tag: 'input', cssPath: path }),
+        value: 'a',
+      })!,
+    );
+    appendDraft(
+      steps,
+      draftFromEvent({
+        type: 'select',
+        fingerprint: fp({ tag: 'select', cssPath: path }),
+        value: 'b',
+      })!,
+    );
+    expect(steps).toHaveLength(2);
+  });
+
+  it('converts an Enter press with the key retained', () => {
+    const d = draftFromEvent({
+      type: 'press',
+      fingerprint: fp({ tag: 'input', role: 'searchbox', labelText: 'Search' }),
+      key: 'Enter',
+    })!;
+    expect(d.action).toBe('press');
+    expect(d.key).toBe('Enter');
+    expect(d.intent).toBe('Search search field');
+  });
+
+  it('maps asserts to expectText for short text, expectVisible otherwise, and coalesces', () => {
+    const confirmFp = fp({
+      tag: 'div',
+      role: null,
+      text: 'Order confirmed',
+      cssPath: 'body > div:nth-of-type(2)',
+    });
+    const short = draftFromEvent({ type: 'assert', fingerprint: confirmFp })!;
+    expect(short.action).toBe('expectText');
+    expect(short.text).toBe('Order confirmed');
+
+    const long = draftFromEvent({
+      type: 'assert',
+      fingerprint: fp({ tag: 'p', role: null, text: 'x'.repeat(80) }),
+    })!;
+    expect(long.action).toBe('expectVisible');
+    expect(long.text).toBeUndefined();
+
+    const steps: DraftStep[] = [];
+    appendDraft(steps, draftFromEvent({ type: 'assert', fingerprint: confirmFp })!);
+    appendDraft(steps, draftFromEvent({ type: 'assert', fingerprint: confirmFp })!);
+    expect(steps).toHaveLength(1); // double assert-click on the same element
+  });
+});
+
+describe('draft editing (assert mode)', () => {
+  function seeded(steps: DraftStep[]): RecorderController {
+    const c = new RecorderController(null as never, null as never);
+    (c as unknown as { steps: DraftStep[] }).steps = steps;
+    return c;
+  }
+
+  it('retypes assertions both ways and edits expected text', () => {
+    const steps: DraftStep[] = [
+      { action: 'expectText', intent: 'Confirmation', text: 'Order confirmed' },
+    ];
+    const c = seeded(steps);
+    c.updateDraft(0, { action: 'expectVisible' });
+    expect(steps[0]).not.toHaveProperty('text'); // visible-asserts carry no text
+    c.updateDraft(0, { action: 'expectText' });
+    expect(steps[0]!.text).toBe(''); // retyping back starts blank
+    c.updateDraft(0, { text: 'Order confirmed' });
+    expect(steps[0]!.text).toBe('Order confirmed');
+  });
+
+  it('refuses to retype interaction steps and validates indices; delete works on any step', () => {
+    const steps: DraftStep[] = [
+      { action: 'click', intent: 'Add to cart button' },
+      { action: 'expectVisible', intent: 'Confirmation' },
+    ];
+    const c = seeded(steps);
+    expect(() => c.updateDraft(0, { action: 'expectText' })).toThrow(/assertion/);
+    expect(() => c.updateDraft(5, {})).toThrow(/no draft step/);
+    c.removeDraft(0);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.action).toBe('expectVisible');
+    expect(() => c.removeDraft(3)).toThrow(/no draft step/);
   });
 });
 

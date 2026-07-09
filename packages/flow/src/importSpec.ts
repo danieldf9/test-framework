@@ -22,7 +22,16 @@ export type ImportResult =
 
 class NotImportable extends Error {}
 
-const KEYED_VERBS = new Set(['click', 'fill', 'expectVisible', 'expectText']);
+const KEYED_VERBS = new Set([
+  'click',
+  'fill',
+  'select',
+  'check',
+  'uncheck',
+  'press',
+  'expectVisible',
+  'expectText',
+]);
 
 /**
  * Lift a hand-authored sentinel spec into flow documents (D39). Deliberately
@@ -126,18 +135,33 @@ function importTest(call: ts.CallExpression, sf: ts.SourceFile): ImportedFlow {
     const stepKey = existingKey ?? mintStepKey();
     if (!existingKey) rekeys.push({ oldStepId, newStepId: stepKey });
 
-    const known = new Set(['intent', 'locator', 'stepKey', 'value', 'text']);
+    const known = new Set(['intent', 'locator', 'stepKey', 'value', 'text', 'key']);
     for (const name of props.keys()) {
       if (!known.has(name)) fail(stmt, sf, `unsupported property '${name}' on s.${method}`);
     }
+    const rejectExtras = (): void => {
+      if (props.has('value') || props.has('text') || props.has('key')) {
+        fail(stmt, sf, `s.${method} takes no value/text/key`);
+      }
+    };
 
     if (method === 'click') {
-      if (props.has('value') || props.has('text')) fail(stmt, sf, 's.click takes no value/text');
+      rejectExtras();
       steps.push({ action: 'click', stepKey, intent, locator, group });
     } else if (method === 'fill') {
       const value = requireString(props, 'value', stmt, sf);
       steps.push({ action: 'fill', stepKey, intent, locator, value, group });
+    } else if (method === 'select') {
+      const value = requireString(props, 'value', stmt, sf);
+      steps.push({ action: 'select', stepKey, intent, locator, value, group });
+    } else if (method === 'check' || method === 'uncheck') {
+      rejectExtras();
+      steps.push({ action: method, stepKey, intent, locator, group });
+    } else if (method === 'press') {
+      const key = requireString(props, 'key', stmt, sf);
+      steps.push({ action: 'press', stepKey, intent, locator, key, group });
     } else if (method === 'expectVisible') {
+      rejectExtras();
       steps.push({ action: 'expectVisible', stepKey, intent, locator, group });
     } else {
       const text = requireString(props, 'text', stmt, sf);
