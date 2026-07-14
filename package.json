@@ -18,12 +18,12 @@
     "validate:workflows": "node scripts/validate-workflows.mjs"
   },
   "devDependencies": {
-    "@eslint/js": "^9.17.0",
-    "eslint": "^9.17.0",
-    "eslint-config-prettier": "^9.1.0",
-    "prettier": "^3.4.2",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.5",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.19.0",
+    "typescript-eslint": "^8.64.0",
     "yaml": "^2.6.1"
   }
 }

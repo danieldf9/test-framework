@@ -13,7 +13,7 @@
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@sentinel/cli": "workspace:*",
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.1.1",
     "typescript": "^5.7.2"
   }
 }
